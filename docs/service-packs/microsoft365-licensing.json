@@ -1,0 +1,20 @@
+{
+  "format": "WhiteProxy.ServicePack",
+  "version": 1,
+  "name": "Microsoft 365 Apps ライセンス認証（主要2ホスト）",
+  "services": [
+    {
+      "name": "Microsoft 365 Apps ライセンス認証",
+      "hosts": [
+        "ols.officeapps.live.com",
+        "activation.sls.microsoft.com"
+      ],
+      "allowedPorts": [
+        443
+      ],
+      "source": "https://learn.microsoft.com/en-us/microsoft-365-apps/licensing-activation/licensing-activation-data-sent-microsoft-365-apps",
+      "definitionVersion": "2026-10-28",
+      "notes": "Microsoft公式資料にあるライセンスサービス2件の例。サインイン用の認証先、証明書の確認先、Office更新先は含みません。製品・認証方式に応じて必要な接続先を確認してください。インポートだけでは通信を許可しません。"
+    }
+  ]
+}

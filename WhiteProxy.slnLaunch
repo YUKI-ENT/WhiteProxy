@@ -1,0 +1,8 @@
+[
+  {
+    "Name": "WhiteProxy 管理GUI",
+    "Projects": [
+      { "Path": "src\\WhiteProxy.Admin\\WhiteProxy.Admin.csproj", "Action": "Start" }
+    ]
+  }
+]

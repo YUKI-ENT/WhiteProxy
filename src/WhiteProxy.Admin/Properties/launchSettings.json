@@ -1,0 +1,6 @@
+{
+  "profiles": {
+    "WhiteProxy 管理GUI": { "commandName": "Project" },
+    "WhiteProxy 本体（要: Visual Studioを管理者として実行）": { "commandName": "Project", "commandLineArgs": "--console" }
+  }
+}
