@@ -10,7 +10,7 @@ internal static class StartupPolicy
     {
         if (args.Contains("--service")) return ApplicationMode.Service;
         if (args.Contains("--console")) return ApplicationMode.Console;
-        if (args.Length == 2 && args[0] == "--manage-service") return ApplicationMode.ServiceManagement;
+        if (args.Length == 2 && args[0] == "--manage-service" || args.SequenceEqual(["--sync-firewall"])) return ApplicationMode.ServiceManagement;
         return ApplicationMode.Gui;
     }
 

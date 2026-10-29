@@ -8,11 +8,11 @@ HTTP absolute-form、CONNECT authority、Hostヘッダーの矛盾を拒否し�
 
 実接続直前に、Titanium固定版の接続実装で検査済みのIPをそのまま接続に使用します。loopback/private/link-local/multicast/unspecified等は拒否します。上流プロキシー経由の宛先検査回避やQUIC経路を有効化していません。私設IPへの例外は製品では設定不可です。
 
-Named Pipeは `WhiteProxy.Read.v1` と `WhiteProxy.Admin.v1`。Network logon SIDはACLで拒否し、一般のローカルUsersは読取り操作だけです。変更用パイプのACLはAdministrators/SYSTEM/NetworkServiceに限定し、さらにRunAsClientで呼出者の実トークンが有効なAdministrators権限を持つか確認します。未昇格トークンは変更不可です。FirstPipeInstanceで同名パイプへの相乗りを防ぎます。最大メッセージ4MiB、要求処理10秒、件数・文字数・参照関係・版番号を検証します。
+Named Pipeは `WhiteProxy.Read.v1` と `WhiteProxy.Admin.v1`。Network logon SIDはACLで拒否し、一般のローカルUsersは読取り操作だけです。変更用パイプのACLはAdministrators/SYSTEM/NetworkServiceに限定し、さらにRunAsClientで呼出者の実トークンが有効なAdministrators権限を持つか確認します。未昇格トークンは変更不可です。FirstPipeInstanceで同名パイプへの相乗りを防ぎます。最大メッセージ4MiB、読取り要求10秒、管理要求はFirewall再同期を含め45秒、件数・文字数・参照関係・版番号を検証します。
 
 設定とログのディレクトリは管理者/SYSTEM/NetworkServiceのみFullControl。管理GUIは起動時にUACで昇格し、すべての管理操作を管理者権限で統一します。サービスはNetworkServiceで実行します。同じEXEのサービス経路では昇格やGUIを起動しません。この分離のためマニフェストはasInvokerを維持し、対話的な起動だけをコードで昇格します。登録時にサービスEXEのProgram Files配置先を保護し、一般ユーザーとサービス自身にはEXEの読取り/実行だけを与えます。
 
-ログはホスト・ポート・実Peer・判定・型/イベント番号等に限定。HTTPヘッダー、クエリ値、パス、本文、Cookie、Authorizationを出力しません。一時許可の理由入力は不要です。操作者・対象・操作・期限を監査します。旧履歴の理由文字列は保持します。読取りIPCはローカル一般ユーザーへ設定・直近ログを公開する設計です。
+ログはホスト・ポート・実Peer・判定・型/イベント番号、およびHTTPのエスケープ済みパス（最大2,048文字）等を記録します。HTTPヘッダー、クエリ、フラグメント、本文、Cookie、Authorizationを出力しません。パス自体に識別子等が含まれる場合はログにも残ります。HTTPS等のCONNECTトンネル内のパスはTLS非復号のため取得しません。一時許可の理由入力は不要です。操作者・対象・操作・期限を監査します。旧履歴の理由文字列は保持します。読取りIPCはローカル一般ユーザーへ設定・直近ログを公開する設計です。
 
 最大同時接続は初期256（設定範囲1〜4096）。ヘッダー/接続タイムアウト15秒、アイドル読書き300秒。ストリームをメモリに全読込みしません。ログは4,096件キュー、1ファイル10MiBで分割、保持日数で削除します。ログ増大による容量枯渇が起きた場合も保存失敗として通信を閉じます。長時間のアイドルWebSocketは再接続が必要になる場合があります。
 
@@ -29,3 +29,7 @@ Named Pipeは `WhiteProxy.Read.v1` と `WhiteProxy.Admin.v1`。Network logon SID
 
 
 Windows Firewallの自動設定は、アプリ固有の `WhiteProxy-Managed-Inbound` ルールだけを対象にします。保護済み配置先のEXE・TCP待受ポート・ローカルIPv4・登録済み送信元範囲・Domain/Privateに制限し、全送信元/0を自動で許可しません。Public、Edge Traversal、Firewall無効化への変更は行いません。ルールはサービスSIDに依存しないプログラム条件を使用し、サービスの実行アカウントや権限を変更しません。既存の手動/組織ルールは別管理です。
+
+Web管理は初期無効、別のHTTPSポート3129で有効化します。`WhiteProxy-Web-Control` 規則は配置済みEXE・指定TCPポート・LocalSubnet・Domain/Privateに限定します。PBKDF2-SHA256（ランダム16バイトソルト、210,000回、32バイトハッシュ）で共通パスワードを保存し、パスワード設定はローカル管理GUIに限定します。認証後のCookieはSecure/HttpOnly/SameSite=Strict、30分で失効します。変更APIにはCSRFトークンと同一Originの確認を要求し、ログインはIPごと5回/分・全体30回/分に制限します。設定変更で全セッションを無効にします。静的ファイルは同梱し、外部CDN・解析スクリプトを使用しません。
+
+Webからの端末変更時は、固定のSYSTEMタスク `WhiteProxy Firewall Sync` へ保護済み設定の再同期だけを要求します。タスクは保護済みEXEの固定引数 `--sync-firewall` を実行します。NetworkServiceにはタスクの読取り/実行のみ許可し、タスクの内容変更やEXEへの書込みを許可しません。Web管理者へWindows管理者トークンを渡さず、プロキシーの動作はNetworkServiceを維持します。証明書・公開範囲・利用手順は [Webコントロール](web-control.md) を参照してください。

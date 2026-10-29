@@ -24,6 +24,8 @@ public sealed class StoppedSettingsStore
     {
         var original = await ReadAsync();
         var updated = Update(original, settings, expectedRevision);
+        var web = new WebControlStore(repository.DirectoryPath).ReadStatus();
+        if (web.Enabled && web.Port == updated.Proxy.Port) throw new InvalidOperationException("プロキシーポートはWeb管理ポートと別にしてください。");
         ListenAddresses.EnsureCurrent(updated.Proxy.ListenAddress);
         repository.SecureDirectory();
         // 編集中に別のGUIから開始された場合にも、保存を中止する。

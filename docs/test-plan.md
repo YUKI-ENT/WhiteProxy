@@ -24,6 +24,9 @@ dotnet test WhiteProxy.sln -c Release
 | IPC | 長さフレーム、負・ゼロ・過大サイズ拒否、不明JSONフィールド拒否 |
 | Windows | 実Named PipeのRunAsClientと実SID/昇格トークン判定、読取/管理ACL分離とNetwork SID拒否 |
 | 保存・ログ | JSON原子的置換とバックアップ、破損/未知スキーマ拒否、自動復旧しない、UTF-8再読込、ログ保存失敗の可視化、初期設定のデフォルト拒否 |
+| Web管理 | 実HTTPSで未ログイン拒否、Secure/HttpOnly/SameSite Cookie、CSRF/Origin拒否、設定共通経路・競合・運用設定変更拒否、パスワード変更で失効、ログイン試行制限、ポート競合時の旧待受維持、Web単独停止、初期無効とハッシュ保存 |
+
+Web UIは隔離したモックAPIでブラウザー操作を確認し、実HTTPSのAPIは自動結合テストで確認します。自己署名証明書を未信頼の内蔵ブラウザーでは証明書警告の回避を行っていません。別PCのブラウザー、NetworkService→SYSTEMタスクによるFirewall再同期、クライアント証明書信頼設定は実機受入確認が必要です。FirewallのオブジェクトとタスクXMLは実Windows APIで非登録の検証を行います。
 
 通信テストは管理者権限や外部ネットワークを必要としません。テスト専用internal経路に限り、ローカルの模擬サーバーへの接続を許可します。製品の保護設定から到達できる切替ではありません。
 

@@ -22,6 +22,8 @@ public sealed class ProxyWorker(ConfigurationRepository repository) : Background
     private byte[] expectedHash = [];
     private DateTimeOffset lastHeartbeat;
     private readonly TimeProvider time = TimeProvider.System;
+    private readonly StartupRetry startupRetry = new();
+    private WebControlServer? webControl;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -59,37 +61,48 @@ public sealed class ProxyWorker(ConfigurationRepository repository) : Background
             else saved = parsed;
         }
         clock = new(time, saved);
-        try
-        {
-            if (!File.Exists(repository.FilePath) && !File.Exists(repository.FilePath + ".bak"))
-                await repository.SaveAsync(Templates.CreateDefault(), stoppingToken);
-            current = await repository.LoadAsync(stoppingToken);
-            expectedHash = SHA256.HashData(await File.ReadAllBytesAsync(repository.FilePath, stoppingToken));
-            healthy = true; error = ""; StartEngine();
-        }
-        catch (Exception ex) { healthy = false; error = StartupReport.DescribeFailure("設定の読込・待受開始", ex); }
+        await TryStartProxyAsync(stoppingToken);
         Audit("起動", "Windowsサービス", error);
         using var ipcCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-        Report("管理用接続口の作成");
+        startupStage = "管理用接続口の作成";
+        if (healthy) Report(startupStage);
         using var readPipe = new NamedPipeListener(() => CreatePipe(false));
         using var adminPipe = new NamedPipeListener(() => CreatePipe(true));
         var read = ServePipe(readPipe, false, ipcCancellation.Token);
         var admin = ServePipe(adminPipe, true, ipcCancellation.Token);
-        Report("管理GUI接続待受", healthy ? "Ready" : "Degraded", error);
+        webControl = new(repository.DirectoryPath, HandleWebCommandAsync, Audit);
+        if (healthy) Report("管理GUI接続待受", "Ready");
         try
         {
+            await webControl.InitializeAsync(stoppingToken);
             using var ticker = new PeriodicTimer(TimeSpan.FromSeconds(1));
             while (await ticker.WaitForNextTickAsync(stoppingToken))
             {
+                if (read.IsFaulted || admin.IsFaulted) throw new InvalidOperationException("IPC待受の作成に失敗しました。別のWhiteProxyプロセスを確認してください。");
                 await mutation.WaitAsync(stoppingToken);
                 try
                 {
                     if (!clock.Check()) { healthy = false; error = "時計の異常を検知。時刻を修正してサービスを再起動してください。"; }
                     if (!logs.Healthy) { healthy = false; error = "ログの保存に失敗しました。保存先・容量を確認してサービスを再起動してください。"; }
+                    if (startupRetry.Pending)
+                    {
+                        if (!clock.Healthy || !logs.Healthy)
+                        {
+                            startupRetry.Complete();
+                            Report("起動再試行の中止", "Degraded", error);
+                        }
+                        else if (time.GetUtcNow() >= startupRetry.NextAttemptUtc)
+                            await TryStartProxyAsync(stoppingToken);
+                        // 再試行待ちのエラーを、未取得の設定ハッシュで上書きしない。
+                        continue;
+                    }
                     try
                     {
-                        var bytes = await File.ReadAllBytesAsync(repository.FilePath, stoppingToken);
-                        if (!SHA256.HashData(bytes).SequenceEqual(expectedHash)) { healthy = false; error = "設定ファイルの外部変更・破損を検出。GUIから設定を再適用してください。"; }
+                        if (expectedHash.Length > 0)
+                        {
+                            var bytes = await File.ReadAllBytesAsync(repository.FilePath, stoppingToken);
+                            if (!SHA256.HashData(bytes).SequenceEqual(expectedHash)) { healthy = false; error = "設定ファイルの外部変更・破損を検出。GUIから設定を再適用してください。"; }
+                        }
                         if (time.GetUtcNow() - lastHeartbeat >= TimeSpan.FromSeconds(10))
                         {
                             var tmp = stamp + ".tmp";
@@ -101,13 +114,13 @@ public sealed class ProxyWorker(ConfigurationRepository repository) : Background
                     engine?.Sweep();
                 }
                 finally { mutation.Release(); }
-                if (read.IsFaulted || admin.IsFaulted) throw new InvalidOperationException("IPC待受の作成に失敗しました。別のWhiteProxyプロセスを確認してください。");
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
         finally
         {
             ipcCancellation.Cancel();
+            await webControl.DisposeAsync();
             engine?.Dispose();
             try { await Task.WhenAll(read, admin); } catch (OperationCanceledException) { }
             Audit("停止", "Windowsサービス", "");
@@ -116,9 +129,38 @@ public sealed class ProxyWorker(ConfigurationRepository repository) : Background
     }
 
     private Configuration? ActiveConfiguration() => healthy && clock?.Healthy == true && logs?.Healthy == true ? Volatile.Read(ref current) : null;
+    private async Task TryStartProxyAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (!File.Exists(repository.FilePath) && !File.Exists(repository.FilePath + ".bak"))
+                await repository.SaveAsync(Templates.CreateDefault(), ct);
+            current = await repository.LoadAsync(ct);
+            expectedHash = SHA256.HashData(await File.ReadAllBytesAsync(repository.FilePath, ct));
+            healthy = true; error = "";
+            StartEngine();
+            var recovered = startupRetry.Pending;
+            startupRetry.Complete();
+            Report("設定の読込・待受開始", "Ready");
+            if (recovered) Audit("起動再試行成功", "Windowsサービス", "待受を開始しました。");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            healthy = false;
+            engine?.Dispose(); engine = null;
+            var delay = clock?.Healthy == true && logs?.Healthy == true ? startupRetry.Failed(ex, time.GetUtcNow()) : null;
+            if (delay is null) startupRetry.Complete();
+            error = StartupReport.DescribeFailure("設定の読込・待受開始", ex) +
+                (delay is { } wait ? $" {wait.TotalSeconds:0}秒後に自動再試行します。" : " 自動再試行を終了しました。原因を解消してサービスを再起動してください。");
+            StartupReport.Write(repository.DirectoryPath, "設定の読込・待受開始", delay is null ? "Degraded" : "Retrying", error, ex);
+            Audit("起動失敗", "Windowsサービス", error);
+        }
+    }
     private void StartEngine()
     {
-        engine = new(ActiveConfiguration, time, e => logs!.Add(new(e.TimeUtc, "通信", e.Peer, e.Host, e.Port, e.Allowed, e.Reason, e.ServiceId, e.Bytes, e.Seconds)));
+        engine = new(ActiveConfiguration, time, e => logs!.Add(new(e.TimeUtc, "通信", e.Peer, e.Host, e.Port, e.Allowed, e.Reason, e.ServiceId, e.Bytes, e.Seconds,
+            RequestPath: e.RequestPath, IsTunnel: e.IsTunnel)));
         logs!.RetentionDays = current.Proxy.LogRetentionDays;
         engine.Start();
     }
@@ -148,7 +190,7 @@ public sealed class ProxyWorker(ConfigurationRepository repository) : Background
             });
             var response = await Handle(request, admin && authorized, actor, requestToken);
             await Protocol.WriteResponseAsync(pipe, response, requestToken);
-        }, ex => Audit("IPC要求拒否", "local", ex.GetType().Name), ct);
+        }, ex => Audit("IPC要求拒否", "local", ex.GetType().Name), ct, admin ? TimeSpan.FromSeconds(45) : null);
     }
 
     private async Task<IpcResponse> Handle(IpcRequest request, bool authorized, string actor, CancellationToken ct)
@@ -157,10 +199,23 @@ public sealed class ProxyWorker(ConfigurationRepository repository) : Background
             request.DeviceIds.Any(id => id is null || id.Length > 64) || request.Reason is null || request.Reason.Length > 500 ||
             request.ServiceId is null || request.ServiceId.Length > 64 || request.GrantId is null || request.GrantId.Length > 64)
             return Fail("IPC要求の形式が不正です。");
+        if (request.Operation == "web-settings")
+        {
+            if (!authorized) return Fail("管理者として起動してください。");
+            if (webControl is null || request.WebControl is null) return Fail("サービスを最新版に更新してください。");
+            try
+            {
+                var result = await webControl.UpdateAsync(request.WebControl, current.Proxy.Port, ct);
+                Audit("Web管理設定", actor, $"enabled={result.Enabled}; port={result.Port}; revision={result.Revision}");
+                return new() { Success = true, WebControl = result, Message = "Web設定を保存しました。" };
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or JsonException or FormatException or System.Security.Cryptography.CryptographicException)
+            { return Fail("Web設定を適用できませんでした。" + (ex is InvalidOperationException ? ex.Message : " ポート・証明書・保存先を確認してください。")); }
+        }
         await mutation.WaitAsync(ct);
         try
         {
-            if (request.Operation == "status") return new() { Success = true, Message = Protocol.OrderedRulesCapability, Configuration = JsonDefaults.Clone(current), Status = Status() };
+            if (request.Operation == "status") return new() { Success = true, Message = Protocol.OrderedRulesCapability, Configuration = JsonDefaults.Clone(current), Status = Status(), WebControl = webControl?.Status() };
             if (request.Operation == "logs") return new() { Success = true, Logs = logs!.Snapshot() };
             if (!authorized) { Audit("設定変更の権限拒否", actor, request.Operation.Length <= 40 ? request.Operation : "invalid"); return Fail("管理者として起動してください。"); }
             if (request.Operation == "validate")
@@ -206,6 +261,7 @@ public sealed class ProxyWorker(ConfigurationRepository repository) : Background
             }
             var validation = ConfigurationValidator.Validate(next);
             if (validation.Count > 0) return Fail(string.Join("\n", validation));
+            if (webControl?.Status() is { Enabled: true } webState && next.Proxy.Port == webState.Port) return Fail("プロキシーポートはWeb管理ポートと別にしてください。");
             if (!clock!.Healthy || !logs!.Healthy) return Fail("時計またはログの異常を解消してサービスを再起動してください。");
             next.Revision = current.Revision + 1;
             var previous = current;
@@ -213,11 +269,15 @@ public sealed class ProxyWorker(ConfigurationRepository repository) : Background
             {
                 await repository.SaveAsync(next, ct);
                 expectedHash = SHA256.HashData(await File.ReadAllBytesAsync(repository.FilePath, ct));
+                if (NeedsFirewallSync(previous, next) && string.Equals(repository.DirectoryPath, ServiceHost.DataDirectory, StringComparison.OrdinalIgnoreCase) && ServiceDiagnostics.Inspect().Installed)
+                    await FirewallSyncTask.RunAsync(ct);
                 Volatile.Write(ref current, next); healthy = true; error = "";
                 bool restart = engine?.Running != true || previous.Proxy.ListenAddress != next.Proxy.ListenAddress ||
                     previous.Proxy.Port != next.Proxy.Port || previous.Proxy.MaxConnections != next.Proxy.MaxConnections;
                 if (restart) { engine?.Dispose(); engine = null; StartEngine(); }
                 else { logs.RetentionDays = next.Proxy.LogRetentionDays; engine?.Sweep(); }
+                startupRetry.Complete();
+                Report("設定適用・待受開始", "Ready");
                 Audit(request.Operation, actor, $"revision={next.Revision}; devices={string.Join(',', request.DeviceIds)}; service={request.ServiceId}; grant={request.GrantId}; end={request.ExpiresAtUtc:O}; reason={request.Reason}");
                 return new() { Success = true, Message = "適用しました。", Configuration = JsonDefaults.Clone(current), Status = Status() };
             }
@@ -228,6 +288,8 @@ public sealed class ProxyWorker(ConfigurationRepository repository) : Background
                 Volatile.Write(ref current, previous);
                 try { await repository.SaveAsync(previous, CancellationToken.None); expectedHash = SHA256.HashData(await File.ReadAllBytesAsync(repository.FilePath)); }
                 catch { error += " 元の設定の保存にも失敗しました。"; }
+                if (NeedsFirewallSync(previous, next) && string.Equals(repository.DirectoryPath, ServiceHost.DataDirectory, StringComparison.OrdinalIgnoreCase) && ServiceDiagnostics.Inspect().Installed)
+                    try { await FirewallSyncTask.RunAsync(CancellationToken.None); } catch { error += " Firewallの復旧にも失敗しました。GUIから再同期してください。"; }
                 Audit("適用失敗・ロールバック", actor, ex.GetType().Name);
                 return Fail(error);
             }
@@ -238,4 +300,7 @@ public sealed class ProxyWorker(ConfigurationRepository repository) : Background
         engine?.SessionCount ?? 0, engine?.DeviceCount ?? 0, engine?.DeniedCount ?? 0,
         healthy && clock?.Healthy == true && logs?.Healthy == true, error, time.GetUtcNow(), logs?.Dropped ?? 0);
     private static IpcResponse Fail(string message) => new() { Message = message };
+    private Task<IpcResponse> HandleWebCommandAsync(IpcRequest request, string actor, CancellationToken ct) => Handle(request, true, actor, ct);
+    private static bool NeedsFirewallSync(Configuration before, Configuration after) => before.Proxy.ListenAddress != after.Proxy.ListenAddress || before.Proxy.Port != after.Proxy.Port ||
+        !before.Devices.Where(d => d.Enabled).Select(d => d.Address).Order().SequenceEqual(after.Devices.Where(d => d.Enabled).Select(d => d.Address).Order());
 }

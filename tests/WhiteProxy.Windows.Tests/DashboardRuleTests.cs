@@ -380,6 +380,52 @@ public class DashboardRuleTests
     }
 
     [Fact]
+    public async Task DashboardRefreshKeepsRowsAndSelectionAndOnlyUpdatesChangedValues()
+    {
+        await Sta(async () =>
+        {
+            using var form = new MainForm();
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            void Set(string name, object value) => typeof(MainForm).GetField(name, flags)!.SetValue(form, value);
+            void Refresh() => typeof(MainForm).GetMethod("RefreshTables", flags)!.Invoke(form, null);
+            var c = Config(); c.Policies[0].AlwaysAllow = true;
+            Set("current", c); Set("connected", true); Set("orderedRules", true);
+            Set("status", new ServiceStatus(true, "127.0.0.1:3128", 0, 0, 0, true, "", Now, 0));
+            Refresh();
+            var grid = (DataGridView)typeof(MainForm).GetField("policies", flags)!.GetValue(form)!;
+            var row = grid.Rows[0];
+            grid.CurrentCell = row.Cells["許可サービス"];
+            row.Selected = true;
+            var currentCell = grid.CurrentCell;
+            int added = 0, removed = 0, changed = 0;
+            grid.RowsAdded += (_, _) => added++;
+            grid.RowsRemoved += (_, _) => removed++;
+            grid.CellValueChanged += (_, _) => changed++;
+            for (int i = 0; i < 3; i++) Refresh();
+            Assert.Equal(0, added); Assert.Equal(0, removed); Assert.Equal(0, changed);
+            Assert.Same(row, grid.Rows[0]); Assert.Same(currentCell, grid.CurrentCell); Assert.True(row.Selected);
+            Assert.Equal("● 開放中", row.Cells["状態"].Value);
+
+            c.Policies[0].Deny = true;
+            Refresh();
+            Assert.Equal("■ 遮断中", row.Cells["状態"].Value);
+            Assert.Same(row, grid.Rows[0]); Assert.Same(currentCell, grid.CurrentCell); Assert.True(row.Selected);
+            Assert.Equal(0, added); Assert.Equal(0, removed); Assert.True(changed > 0);
+
+            // 行構成が変わる編集・並べ替えは引き続き反映する。
+            c.Devices.Add(new() { Id = "pc2", Address = "192.168.10.22" });
+            c.Policies.Add(new() { DeviceId = "pc2", ServiceId = "web" });
+            Refresh();
+            Assert.Equal(2, grid.Rows.Count);
+            Assert.Equal("pc/web", Assert.Single(grid.SelectedRows.Cast<DataGridViewRow>()).Tag);
+            c.Policies.Reverse(); Refresh();
+            Assert.Equal("pc2/web", grid.Rows[0].Tag);
+            Assert.Equal("pc/web", Assert.Single(grid.SelectedRows.Cast<DataGridViewRow>()).Tag);
+            await Task.CompletedTask;
+        });
+    }
+
+    [Fact]
     public async Task VersionAndServiceTableUseCurrentPresentation()
     {
         await Sta(async () =>

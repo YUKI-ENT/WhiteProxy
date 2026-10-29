@@ -12,7 +12,8 @@ using WhiteProxy.Core;
 namespace WhiteProxy.Proxy;
 
 public sealed record TrafficEvent(DateTimeOffset TimeUtc, string Peer, string Host, int Port,
-    bool Allowed, string Reason, string? ServiceId = null, long Bytes = 0, double Seconds = 0);
+    bool Allowed, string Reason, string? ServiceId = null, long Bytes = 0, double Seconds = 0,
+    string RequestPath = "", bool IsTunnel = false);
 
 public sealed class ProxyEngine : IDisposable
 {
@@ -93,7 +94,7 @@ public sealed class ProxyEngine : IDisposable
             var authority = e.HttpClient.Request.RequestUriString;
             var target = ParseAuthority(authority, 443, true);
             ValidateHostHeader(e, target.Host, target.Port, 443);
-            if (!Authorize(e, target.Host, target.Port)) e.DenyConnect = true;
+            if (!Authorize(e, target.Host, target.Port, isTunnel: true)) e.DenyConnect = true;
         }
         catch (Exception ex) when (ex is ArgumentException or UriFormatException or InvalidOperationException)
         {
@@ -112,7 +113,10 @@ public sealed class ProxyEngine : IDisposable
                 !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment)) throw new ArgumentException();
             var host = HostRules.Normalize(uri.IdnHost);
             ValidateHostHeader(e, host, uri.Port, 80);
-            if (!Authorize(e, host, uri.Port))
+            // エスケープされたパスだけを記録する。クエリやフラグメントは含めない。
+            var path = uri.AbsolutePath;
+            if (path.Length > 2048) path = path[..2047] + "…";
+            if (!Authorize(e, host, uri.Port, path))
                 e.GenericResponse("WhiteProxy: 管理ポリシーにより拒否されました。", HttpStatusCode.Forbidden);
             // プロキシー認証情報はオリジンサーバーへ転送しない。
             e.HttpClient.Request.Headers.RemoveHeader("Proxy-Authorization");
@@ -144,15 +148,15 @@ public sealed class ProxyEngine : IDisposable
         if (actual.Host != host || actual.Port != port) throw new ArgumentException();
     }
 
-    private bool Authorize(SessionEventArgsBase e, string host, int port)
+    private bool Authorize(SessionEventArgsBase e, string host, int port, string requestPath = "", bool isTunnel = false)
     {
         var c = configuration();
         var decision = c is null ? new Decision(false, "設定・時計・ログ異常") : policy.Evaluate(c, e.ClientRemoteEndPoint.Address, host, port);
-        if (!decision.Allowed) { Reject(e, host, port, decision.Reason); return false; }
+        if (!decision.Allowed) { Reject(e, host, port, decision.Reason, requestPath, isTunnel); return false; }
         var key = e.ClientRemoteEndPoint.ToString();
-        if (!sockets.TryGetValue(key, out var socket)) { Reject(e, host, port, "接続ハンドル取得失敗"); return false; }
+        if (!sockets.TryGetValue(key, out var socket)) { Reject(e, host, port, "接続ハンドル取得失敗", requestPath, isTunnel); return false; }
         Finish(e.ClientConnectionId, "次のリクエスト");
-        var tracked = new TrackedSession(e, socket, e.ClientRemoteEndPoint.Address, host, port, decision, clock.GetUtcNow());
+        var tracked = new TrackedSession(e, socket, e.ClientRemoteEndPoint.Address, host, port, decision, clock.GetUtcNow(), requestPath, isTunnel);
         sessions[e.ClientConnectionId] = tracked;
         if (!subscribed.TryGetValue(e, out _))
         {
@@ -162,14 +166,16 @@ public sealed class ProxyEngine : IDisposable
             e.DataSent += Count;
             e.DataReceived += Count;
         }
-        log(new(clock.GetUtcNow(), tracked.Peer.ToString(), host, port, true, decision.Reason, decision.ServiceId));
+        log(new(clock.GetUtcNow(), tracked.Peer.ToString(), host, port, true, decision.Reason, decision.ServiceId,
+            RequestPath: requestPath, IsTunnel: isTunnel));
         return true;
     }
 
-    private void Reject(SessionEventArgsBase e, string host, int port, string reason)
+    private void Reject(SessionEventArgsBase e, string host, int port, string reason, string requestPath = "", bool isTunnel = false)
     {
         Interlocked.Increment(ref deniedCount);
-        log(new(clock.GetUtcNow(), e.ClientRemoteEndPoint.Address.ToString(), host, port, false, reason));
+        log(new(clock.GetUtcNow(), e.ClientRemoteEndPoint.Address.ToString(), host, port, false, reason,
+            RequestPath: requestPath, IsTunnel: isTunnel));
     }
 
     public void Sweep()
@@ -210,7 +216,7 @@ public sealed class ProxyEngine : IDisposable
     {
         if (sessions.TryRemove(id, out var s))
             log(new(clock.GetUtcNow(), s.Peer.ToString(), s.Host, s.Port, true, reason, s.Decision.ServiceId,
-                Interlocked.Read(ref s.Bytes), (clock.GetUtcNow() - s.Start).TotalSeconds));
+                Interlocked.Read(ref s.Bytes), (clock.GetUtcNow() - s.Start).TotalSeconds, s.RequestPath, s.IsTunnel));
     }
 
     public void Dispose()
@@ -221,7 +227,8 @@ public sealed class ProxyEngine : IDisposable
         server.Dispose(); Running = false;
     }
 
-    private sealed class TrackedSession(SessionEventArgsBase args, Socket socket, IPAddress peer, string host, int port, Decision decision, DateTimeOffset start)
+    private sealed class TrackedSession(SessionEventArgsBase args, Socket socket, IPAddress peer, string host, int port, Decision decision, DateTimeOffset start,
+        string requestPath, bool isTunnel)
     {
         public SessionEventArgsBase Args { get; } = args;
         public Socket Socket { get; } = socket;
@@ -230,6 +237,8 @@ public sealed class ProxyEngine : IDisposable
         public int Port { get; } = port;
         public Decision Decision { get; } = decision;
         public DateTimeOffset Start { get; } = start;
+        public string RequestPath { get; } = requestPath;
+        public bool IsTunnel { get; } = isTunnel;
         public long Bytes;
     }
 }

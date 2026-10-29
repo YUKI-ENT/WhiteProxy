@@ -1,12 +1,12 @@
-using WhiteProxy.Core;
 
-namespace WhiteProxy.Admin;
 
-internal static class DashboardRules
+namespace WhiteProxy.Core;
+
+public static class DashboardRules
 {
-    internal static string Key(AccessPolicy rule) => rule.DeviceId + "/" + rule.ServiceId;
+    public static string Key(AccessPolicy rule) => rule.DeviceId + "/" + rule.ServiceId;
 
-    internal static List<AccessPolicy> List(Configuration config, DateTimeOffset now)
+    public static List<AccessPolicy> List(Configuration config, DateTimeOffset now)
     {
         var result = config.Policies.Select(JsonDefaults.Clone).ToList();
         var pairs = result.Select(p => (p.DeviceId, p.ServiceId)).ToHashSet();
@@ -16,17 +16,17 @@ internal static class DashboardRules
         return result;
     }
 
-    internal static string ScheduleText(AccessPolicy rule) => rule.AlwaysAllow ? "全日・24時間" :
+    public static string ScheduleText(AccessPolicy rule) => rule.AlwaysAllow ? "全日・24時間" :
         rule.Schedules.Any(s => s.Enabled) ? string.Join(" / ", rule.Schedules.Where(s => s.Enabled).Select(s =>
-            $"{string.Join('・', s.Days.Select(Editors.DayName))} {s.Start:HH:mm}～{s.End:HH:mm}{(s.End < s.Start ? "（翌日）" : "")}")) : "一時許可のみ";
+            $"{string.Join('・', s.Days.Select(d => "日月火水木金土"[(int)d].ToString()))} {s.Start:HH:mm}～{s.End:HH:mm}{(s.End < s.Start ? "（翌日）" : "")}")) : "一時許可のみ";
 
-    internal static Decision Evaluate(Configuration config, AccessPolicy rule, DateTimeOffset now)
+    public static Decision Evaluate(Configuration config, AccessPolicy rule, DateTimeOffset now)
     {
         var first = CoveringRule(config, rule, now) ?? rule;
         return new PolicyEngine(new SnapshotClock(now)).EvaluateRule(config, first.DeviceId, first.ServiceId);
     }
 
-    internal static string Reason(Configuration config, AccessPolicy rule, DateTimeOffset now)
+    public static string Reason(Configuration config, AccessPolicy rule, DateTimeOffset now)
     {
         var covering = CoveringRule(config, rule, now);
         var reason = Evaluate(config, rule, now).Reason;
@@ -54,7 +54,7 @@ internal static class DashboardRules
             config.Devices.Any(d => d.Id == p.DeviceId && Ipv4Network.Parse(d.Address) is var upper && upper.Prefix <= network.Prefix && upper.Overlaps(network)));
     }
 
-    internal static bool Move(Configuration config, string key, int direction)
+    public static bool Move(Configuration config, string key, int direction)
     {
         if (direction is not -1 and not 1) return false;
         var index = config.Policies.FindIndex(p => Key(p) == key);
@@ -65,7 +65,7 @@ internal static class DashboardRules
     }
 
     // insertionIndexは移動前の行と行の間（0～Count）。ドラッグ表示の挿入線と一致させる。
-    internal static bool MoveTo(Configuration config, string key, int insertionIndex)
+    public static bool MoveTo(Configuration config, string key, int insertionIndex)
     {
         var index = config.Policies.FindIndex(p => Key(p) == key);
         if (index < 0 || insertionIndex < 0 || insertionIndex > config.Policies.Count) return false;
@@ -75,7 +75,7 @@ internal static class DashboardRules
         return true;
     }
 
-    internal static AccessPolicy? CloneAfter(Configuration config, string key)
+    public static AccessPolicy? CloneAfter(Configuration config, string key)
     {
         var index = config.Policies.FindIndex(p => Key(p) == key);
         if (index < 0) return null;
@@ -90,7 +90,7 @@ internal static class DashboardRules
         return rule;
     }
 
-    internal static string NextStart(Configuration config, AccessPolicy rule, DateTimeOffset now)
+    public static string NextStart(Configuration config, AccessPolicy rule, DateTimeOffset now)
     {
         if (rule.Deny || config.Proxy.GlobalBlock) return "遮断解除が必要";
         var device = config.Devices.FirstOrDefault(d => d.Id == rule.DeviceId);
@@ -110,3 +110,4 @@ internal static class DashboardRules
         public override DateTimeOffset GetUtcNow() => now;
     }
 }
+

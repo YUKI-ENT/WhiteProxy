@@ -7,6 +7,25 @@ public sealed partial class MainForm
     private readonly NotifyIcon tray = new();
     private readonly ContextMenuStrip trayMenu = new();
     private bool exitGui;
+    private bool startInTray;
+
+    protected override void SetVisibleCore(bool value)
+    {
+        // ログオン起動時はウィンドウを一瞬表示することなくトレイで開始する。
+        if (value && startInTray)
+        {
+            startInTray = false;
+            if (ServiceDiagnostics.Inspect().Installed)
+            {
+                if (!IsHandleCreated) CreateHandle();
+                tray.Visible = true;
+                timer.Start();
+                _ = RefreshAsync();
+                value = false;
+            }
+        }
+        base.SetVisibleCore(value);
+    }
 
     private void InitializeTray()
     {

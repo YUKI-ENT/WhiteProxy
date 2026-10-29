@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>WhiteProxy — Webコントロール</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <section id="login" class="login-shell" hidden>
+    <form id="login-form" class="login-card">
+      <span class="brand-mark" aria-hidden="true">W</span>
+      <h1>WhiteProxy</h1><p class="muted">Webコントロール</p>
+      <label for="password">管理パスワード</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256" autofocus>
+      <p id="login-error" class="error-text" role="alert"></p>
+      <button type="submit" class="primary wide">ログイン</button>
+      <p class="login-note">このサーバーの「設定・サービス」で設定した<br>Web管理用パスワードを入力してください。</p>
+    </form>
+  </section>
+  <div id="application" hidden>
+    <header class="topbar"><a class="brand" href="#dashboard"><span class="brand-mark small">W</span>WhiteProxy</a><span class="topbar-sub">Webコントロール</span><span id="connection" class="connection">接続しています…</span><button id="logout" class="ghost">ログアウト</button></header>
+    <div class="layout">
+      <aside class="sidebar"><div class="nav-caption">コントロール</div><nav aria-label="メインメニュー"><a href="#dashboard" data-page="dashboard"><span aria-hidden="true">▦</span>ダッシュボード</a><a href="#services" data-page="services"><span aria-hidden="true">◈</span>許可サービス</a><a href="#logs" data-page="logs"><span aria-hidden="true">≡</span>通信・監査ログ</a></nav><div class="sidebar-footer"><span class="secure-dot"></span> HTTPS 管理接続<br><span id="timezone">サーバー時刻で判定</span></div></aside>
+      <main>
+        <div id="message" class="message" role="status" hidden></div>
+        <section id="page-dashboard" class="page">
+          <div class="page-heading"><div><p class="eyebrow">OVERVIEW</p><h1>ダッシュボード</h1></div><button data-action="refresh">↻ 更新</button></div>
+          <div id="stats" class="stats"></div>
+          <section class="panel rules-panel"><div class="panel-toolbar"><div class="toolbar-main"><button class="primary" data-action="rule-add">＋ 許可ルールを追加</button><span class="toolbar-note">基本は拒否。上から順に一致する有効なルールを適用します。</span></div><fieldset class="emergency"><legend>緊急操作（全ルール共通）</legend><button class="danger" data-action="global-block">すべて遮断</button><button class="grant" data-action="global-unblock">全遮断を解除</button></fieldset></div><div id="global-warning" class="block-warning" hidden>全遮断中です。解除するまで、すべての通信を拒否します。</div><div class="table-scroll"><table class="rules-table"><thead><tr><th>状態</th><th>対象端末 / IPv4・CIDR</th><th>許可サービス</th><th>通常の許可時間</th><th>現在の理由</th><th class="actions-heading">操作</th></tr></thead><tbody id="rules-body"></tbody></table></div><div class="panel-foot">↑ ↓ でルールの順序を変更できます。Cloneは直下へ複製し、一時許可の期限は引き継ぎません。</div></section>
+        </section>
+        <section id="page-services" class="page" hidden>
+          <div class="page-heading"><div><p class="eyebrow">ALLOWLIST</p><h1>許可サービス</h1></div><button class="primary" data-action="service-add">＋ サービスを追加</button></div>
+          <section class="panel"><div class="panel-toolbar"><div class="toolbar-main"><button data-action="service-import">JSONから追加</button><button data-action="service-export">選択サービスをJSON出力</button></div><span class="toolbar-note">ホストは1行1件。*.example.com は親ホストを含みません。</span></div><div class="table-scroll"><table><thead><tr><th class="check-col"><input type="checkbox" id="select-all-services" aria-label="すべてのサービスを選択"></th><th>サービス</th><th>状態</th><th>ホストパターン</th><th>TCPポート</th><th>注意・出典</th><th>操作</th></tr></thead><tbody id="services-body"></tbody></table></div><div class="panel-foot">サービスを追加しただけでは通信は許可されません。ダッシュボードに対象端末と許可時間のルールを登録してください。</div></section>
+          <input id="service-file" type="file" accept=".json,application/json" hidden>
+        </section>
+        <section id="page-logs" class="page" hidden>
+          <div class="page-heading"><div><p class="eyebrow">ACTIVITY</p><h1>通信・監査ログ</h1></div><div class="button-row"><button data-action="logs-refresh">↻ ログを取得</button><button data-action="logs-export">CSV出力</button></div></div>
+          <section class="panel"><div class="log-filters"><input id="log-search" type="search" placeholder="端末・ホスト・パス・理由で検索" aria-label="ログの検索"><select id="log-kind" aria-label="ログ種別"><option value="all">すべて</option><option value="allow">許可</option><option value="deny">拒否</option><option value="audit">監査</option></select><label>開始<input id="log-from" type="date"></label><label>終了<input id="log-to" type="date"></label><span id="log-count" class="muted"></span></div><div class="table-scroll"><table class="logs-table"><thead><tr><th>時刻</th><th>種別</th><th>端末IP</th><th>宛先ホスト</th><th>パス</th><th>ポート</th><th>結果</th><th>理由</th><th>サービス</th><th>バイト</th><th>秒</th><th>操作者</th><th>操作</th></tr></thead><tbody id="logs-body"></tbody></table></div><div class="panel-foot">直近1,000件。HTTPはクエリを除くパスを表示。HTTPSはTLS非復号のためパスを取得できません。ログはサーバーにも保存されます。</div></section>
+        </section>
+        <footer class="main-footer"><span>WhiteProxy · ホワイトリスト式プロキシー</span><span id="updated">—</span></footer>
+      </main>
+    </div>
+  </div>
+  <dialog id="editor"><form id="editor-form"><header class="dialog-heading"><h2 id="editor-title"></h2><button type="button" class="icon-button" id="editor-close" aria-label="閉じる">×</button></header><div id="editor-body" class="dialog-body"></div><p id="editor-error" class="error-text" role="alert"></p><footer class="dialog-footer"><button type="button" id="editor-cancel">キャンセル</button><button type="submit" class="primary" id="editor-save">保存</button></footer></form></dialog>
+</body>
+</html>

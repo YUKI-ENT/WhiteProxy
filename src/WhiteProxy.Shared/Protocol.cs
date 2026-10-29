@@ -50,6 +50,7 @@ public sealed class IpcRequest
     public DateTimeOffset? ExpiresAtUtc { get; set; }
     public string Reason { get; set; } = "";
     public string GrantId { get; set; } = "";
+    public WebControlChange? WebControl { get; set; }
 }
 
 public sealed class IpcResponse
@@ -59,20 +60,33 @@ public sealed class IpcResponse
     public Configuration? Configuration { get; set; }
     public ServiceStatus? Status { get; set; }
     public List<LogEntry> Logs { get; set; } = [];
+    public WebControlStatus? WebControl { get; set; }
 }
+
+public sealed class WebControlChange
+{
+    public bool Enabled { get; set; }
+    public int Port { get; set; } = 3129;
+    public string Password { get; set; } = "";
+    public long ExpectedRevision { get; set; }
+}
+
+public sealed record WebControlStatus(bool Enabled, int Port, bool PasswordConfigured, long Revision,
+    bool Running = false, string Error = "", string CertificateFingerprint = "", IReadOnlyList<string>? Urls = null);
 
 public sealed record ServiceStatus(bool Running, string Listen, int Connections, int Devices,
     long Denied, bool Healthy, string Error, DateTimeOffset TimeUtc, long DroppedLogs);
 
 public sealed record LogEntry(DateTimeOffset TimeUtc, string Kind, string Peer, string Host, int Port,
-    bool Allowed, string Reason, string? ServiceId = null, long Bytes = 0, double Seconds = 0, string Actor = "");
+    bool Allowed, string Reason, string? ServiceId = null, long Bytes = 0, double Seconds = 0, string Actor = "",
+    string RequestPath = "", bool IsTunnel = false);
 
 public sealed class PipeClient
 {
     public async Task<IpcResponse> SendAsync(IpcRequest request, bool admin = false, CancellationToken ct = default)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(12));
+        timeout.CancelAfter(TimeSpan.FromSeconds(admin ? 50 : 12));
         using var pipe = new NamedPipeClientStream(".", admin ? Protocol.AdminPipe : Protocol.ReadPipe,
             PipeDirection.InOut, PipeOptions.Asynchronous, System.Security.Principal.TokenImpersonationLevel.Impersonation);
         using (var connectTimeout = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token))

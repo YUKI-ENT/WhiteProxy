@@ -15,7 +15,7 @@ internal sealed class NamedPipeListener : IDisposable
     }
 
     internal async Task RunAsync(Func<NamedPipeServerStream, CancellationToken, Task> handle,
-        Action<Exception> rejected, CancellationToken stop)
+        Action<Exception> rejected, CancellationToken stop, TimeSpan? requestTimeout = null)
     {
         while (!stop.IsCancellationRequested)
         {
@@ -25,7 +25,7 @@ internal sealed class NamedPipeListener : IDisposable
                 await pipe.WaitForConnectionAsync(stop);
                 accepted = true;
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop);
-                timeout.CancelAfter(TimeSpan.FromSeconds(10));
+                timeout.CancelAfter(requestTimeout ?? TimeSpan.FromSeconds(10));
                 await handle(pipe, timeout.Token);
             }
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { break; }

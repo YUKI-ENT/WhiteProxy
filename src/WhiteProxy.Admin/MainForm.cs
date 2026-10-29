@@ -29,7 +29,7 @@ public sealed partial class MainForm : Form
     private string connectionHelp = "「設定・サービス」でサービスを登録・開始してください。";
     private readonly DataGridView services = Grid(), policies = Grid(), logGrid = Grid();
     private bool orderedRules, rowActionBusy;
-    private readonly TextBox logSearch = new() { Width = 280, PlaceholderText = "端末・ホスト・理由などで検索" };
+    private readonly TextBox logSearch = new() { Width = 280, PlaceholderText = "端末・ホスト・パス・理由で検索" };
     private readonly ComboBox logKind = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
     private readonly DateTimePicker logFrom = new() { Width = 140, Format = DateTimePickerFormat.Short, ShowCheckBox = true, Checked = false };
     private readonly DateTimePicker logTo = new() { Width = 140, Format = DateTimePickerFormat.Short, ShowCheckBox = true, Checked = false };
@@ -41,8 +41,9 @@ public sealed partial class MainForm : Form
 
     public MainForm() : this(false) { }
 
-    public MainForm(bool openSettings)
+    public MainForm(bool openSettings, bool startInTray = false)
     {
+        this.startInTray = startInTray;
         Text = GuiInstance.WindowTitle;
         InitializeTray();
         Size = new(1280, 860); MinimumSize = new(1050, 720); StartPosition = FormStartPosition.CenterScreen;
@@ -69,19 +70,29 @@ public sealed partial class MainForm : Form
     private void BuildDashboard()
     {
         var page = Page("ダッシュボード");
-        var bar = Toolbar(55);
+        var bar = new TableLayoutPanel { Dock = DockStyle.Top, Height = 52, ColumnCount = 2, RowCount = 1, Padding = new(0, 3, 0, 4) };
+        bar.ColumnStyles.Add(new(SizeType.AutoSize));
+        bar.ColumnStyles.Add(new(SizeType.Percent, 100));
         AddButton(bar, "＋ 許可ルールを追加", () => EditPolicy(false), tone: "edit");
-        var emergency = Toolbar(50);
-        AddButton(emergency, "■ すべて遮断", async () =>
+        var note = new Label { Text = "基本は拒否。以下のルールにマッチするサービスのみ許可します。", Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, ForeColor = Color.FromArgb(70, 82, 101), Margin = new(10, 0, 0, 0) };
+        toolTips.SetToolTip(note, note.Text + "\n右端のつまみをドラッグして順序を変更します。Cloneは直下へコピー。一時許可の期限は複製しません。");
+        bar.Controls.Add(note, 1, 0);
+        var overview = new Panel { Dock = DockStyle.Top, Height = 78, Padding = new(0, 0, 0, 4) };
+        var emergency = new GroupBox { Text = "緊急操作（全ルール共通）", Dock = DockStyle.Right, Width = 280, Padding = new(8, 4, 8, 6) };
+        var emergencyButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
+        emergency.Controls.Add(emergencyButtons);
+        AddButton(emergencyButtons, "■ すべて遮断", async () =>
         {
             if (Confirm("すべての通信を遮断します。解除までスケジュール・一時許可より優先されます。実行しますか。"))
                 await SendMutation(new() { Operation = "block", Block = true });
         }, true);
-        AddButton(emergency, "全遮断を解除", async () => { if (Confirm("全遮断を解除し、保存済みの許可ルールに戻しますか。")) await SendMutation(new() { Operation = "block", Block = false }); }, tone: "grant");
-        emergency.Controls.Add(new Label { Text = "緊急操作（全ルール共通）", AutoSize = true, Padding = new(8, 10, 0, 0) });
-        var note = Note("基本は拒否。時間外の行は読み飛ばし、IP/CIDR・サービスが一致する最初の有効な許可・一時遮断を適用します。\n右端のつまみをドラッグして順序を変更します。Cloneは直下へコピー。一時許可の期限は複製しません。");
+        AddButton(emergencyButtons, "全遮断を解除", async () => { if (Confirm("全遮断を解除し、保存済みの許可ルールに戻しますか。")) await SendMutation(new() { Operation = "block", Block = false }); }, tone: "grant");
+        summary.Dock = DockStyle.Fill;
+        summary.Padding = new(6, 8, 10, 4);
+        overview.Controls.Add(summary); overview.Controls.Add(emergency);
         policies.MultiSelect = false;
-        page.Controls.Add(policies); page.Controls.Add(note); page.Controls.Add(bar); page.Controls.Add(emergency); page.Controls.Add(summary);
+        page.Controls.Add(policies); page.Controls.Add(bar); page.Controls.Add(overview);
         foreach (var text in new[] { "状態", "対象端末 / IPv4・CIDR", "許可サービス", "通常の許可時間", "現在の理由" })
             policies.Columns.Add(new DataGridViewTextBoxColumn { Name = text, HeaderText = text, SortMode = DataGridViewColumnSortMode.NotSortable });
         foreach (var (key, text, width) in new[] { ("edit", "編集", 58), ("grant", "一時許可", 80), ("block", "一時遮断", 80), ("delete", "削除", 56), ("clone", "Clone", 64) })
@@ -104,6 +115,8 @@ public sealed partial class MainForm : Form
         policies.ColumnHeadersHeight = 48;
         policies.Columns["状態"]!.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
         policies.Columns["状態"]!.Width = 108;
+        policies.Columns["状態"]!.FillWeight = 70; policies.Columns["対象端末 / IPv4・CIDR"]!.FillWeight = 145;
+        policies.Columns["許可サービス"]!.FillWeight = 90; policies.Columns["通常の許可時間"]!.FillWeight = 145; policies.Columns["現在の理由"]!.FillWeight = 140;
         policies.CellPainting += DashboardTheme.PaintDecoration;
         EnableRuleDragging();
         policies.CellContentClick += async (_, e) => await RunRuleAction(e.RowIndex, e.ColumnIndex);
@@ -126,14 +139,18 @@ public sealed partial class MainForm : Form
             foreach (var key in new[] { "edit", "grant", "block", "delete", "clone" })
             {
                 var cell = (RuleActionCell)row.Cells[key];
-                cell.ActionEnabled = editable && (key switch
+                var enabled = editable && (key switch
                 {
                     "grant" => grants || !current.Proxy.GlobalBlock && !rule.Deny && current.Devices.Any(d => d.Id == rule.DeviceId && d.Enabled && !d.Paused) && current.Services.Any(x => x.Id == rule.ServiceId && x.Enabled && x.Hosts.Count > 0),
                     _ => true
                 });
+                if (cell.ActionEnabled != enabled)
+                {
+                    cell.ActionEnabled = enabled;
+                    policies.InvalidateCell(cell);
+                }
             }
         }
-        policies.Invalidate();
     }
 
     private async Task RunRuleAction(int rowIndex, int columnIndex)
@@ -207,7 +224,7 @@ public sealed partial class MainForm : Form
         var transfer = Toolbar(50);
         AddButton(transfer, "JSONからインポート", ImportServices, tone: "grant");
         AddButton(transfer, "選択サービスをJSONにエクスポート", ExportServices, tone: "export");
-        page.Controls.Add(services); page.Controls.Add(Note("テンプレートは初期候補です。Googleホストの他機能、WU/Defenderの重複に注意。更新用ホストの空リストは必ず拒否します。無効化は既存接続にも適用します。")); page.Controls.Add(transfer); page.Controls.Add(bar);
+        page.Controls.Add(services); page.Controls.Add(Note("初期候補はWindows Updateのみです。必要なサービスは追加・JSON取込で登録できます。ホストの空リストは必ず拒否します。無効化は既存接続にも適用します。")); page.Controls.Add(transfer); page.Controls.Add(bar);
         DashboardTheme.StyleTable(services); services.CellPainting += DashboardTheme.PaintDecoration;
         services.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0) await EditService(true); };
     }
@@ -253,6 +270,7 @@ public sealed partial class MainForm : Form
 
     private void BuildLogs()
     {
+        LogTableTheme.Configure(logGrid);
         var page = Page("通信・監査ログ"); var bar = Toolbar(98);
         AddButton(bar, "ログを取得", async () => { var r = await client.SendAsync(new() { Operation = "logs" }); logEntries = r.Logs; FilterLogs(); });
         AddButton(bar, "表示結果をCSV出力", ExportLogs);
@@ -261,7 +279,7 @@ public sealed partial class MainForm : Form
         bar.Controls.AddRange([logSearch, logKind, new Label { Text = "開始", AutoSize = true }, logFrom, new Label { Text = "終了", AutoSize = true }, logTo]);
         logSearch.TextChanged += (_, _) => FilterLogs(); logKind.SelectedIndexChanged += (_, _) => FilterLogs();
         logFrom.ValueChanged += (_, _) => FilterLogs(); logTo.ValueChanged += (_, _) => FilterLogs();
-        page.Controls.Add(logGrid); page.Controls.Add(Note("直近1,000件。詳細のJSONLは保存先のlogs/に日別・サイズ別保存。クエリ値・本文・Cookie・認証ヘッダーは記録しません。CSVは現在のフィルタ結果を出力します。")); page.Controls.Add(bar);
+        page.Controls.Add(logGrid); page.Controls.Add(Note("直近1,000件。HTTPはパスを表示。HTTPS等のCONNECTはTLS非復号のためパス取得不可です。\nクエリ・本文・Cookie・認証ヘッダーは記録しません。JSONLはlogs/に保存。CSVは現在のフィルタ結果を出力します。")); page.Controls.Add(bar);
     }
     private void BuildSettings()
     {
@@ -276,6 +294,7 @@ public sealed partial class MainForm : Form
         toolTips.SetToolTip(openFirewall, "詳細設定付きWindows Defenderファイアウォールを開きます。受信の規則 → WhiteProxy-Managed-Inbound → スコープで送信元範囲を確認できます。");
         operationGroup.Controls.Add(serviceStartup); operationGroup.Controls.Add(operationRow); operationGroup.Controls.Add(serviceBadge);
         body.Controls.Add(operationGroup);
+        BuildWebControl(body);
 
         var setupGroup = new GroupBox { Text = "初期設定・登録管理（停止中のみ）", Width = 950, Height = 210, Padding = new(14, 24, 14, 12) };
         var setupRows = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false };
@@ -321,7 +340,7 @@ public sealed partial class MainForm : Form
         serviceBadge.Text = "● " + model.StatusText; serviceBadge.ForeColor = model.StatusColor;
         serviceStartup.Text = installation.StartupDescription;
         registrationHint.Text = !installation.Installed
-            ? "初回登録：サービス登録・自動起動・Windows Firewall設定を行って開始します。\nこのEXEはProgram Files\\WhiteProxyへ配置されます。"
+            ? "初回登録：サービス・Firewall・ログオン時のトレイ起動を設定して開始します。\nこのEXEはProgram Files\\WhiteProxyへ配置されます。"
             : installation.State != "Stopped"
                 ? "登録済みです。待受設定・プログラム更新・登録削除は、上の「停止」で停止してから操作できます。"
                 : "プログラム更新：このEXEで登録済みサービスのプログラムを入れ替えて開始します。\n設定とログは保持します。毎回の起動で行う必要はありません。";
@@ -359,16 +378,17 @@ public sealed partial class MainForm : Form
             if (IsDisposed || Disposing) return;
             if (!r.Success || r.Configuration is null || r.Status is null) throw new IOException();
             connected = true; orderedRules = r.Message == Protocol.OrderedRulesCapability; current = r.Configuration; status = r.Status;
+            UpdateWebControl(r.WebControl);
             state.Text = $"{(status.Healthy && status.Running ? "● 稼働中" : "■ エラー・遮断中")}   {status.Listen}    |    管理者    |    {(current.Proxy.GlobalBlock ? "管理者による全遮断" : "ポリシー制御中")}";
             summary.Text = $"接続中 {status.Connections} セッション / {status.Devices} 端末    拒否 {status.Denied:N0} 件（起動後）\n" +
                 (status.Healthy ? "×・最小化でトレイへ格納します。右クリックでGUIを終了してもサービスは継続します。" : status.Error + $" ログ欠損: {status.DroppedLogs}");
             if (!orderedRules) summary.Text = "サービス本体が旧版です。「設定・サービス」で停止し、このEXEから「サービスのプログラムを更新」を実行してください。";
-            RefreshTables();
         }
         catch (Exception ex) when (ex is IOException or OperationCanceledException or UnauthorizedAccessException)
         {
             if (IsDisposed || Disposing) return;
             connected = false;
+            UpdateWebControl(null);
             var installation = ServiceDiagnostics.Inspect();
             var report = StartupReport.Read(ServiceHost.DataDirectory);
             connectionHelp = installation.Description;
@@ -413,9 +433,12 @@ public sealed partial class MainForm : Form
             row.DefaultCellStyle.SelectionBackColor = Color.FromArgb(232, 240, 253);
             row.DefaultCellStyle.SelectionForeColor = DashboardTheme.Ink;
         }
-        services.Columns["状態"]!.AutoSizeMode = DataGridViewAutoSizeColumnMode.None; services.Columns["状態"]!.Width = 100;
-        services.Columns["サービス"]!.FillWeight = 130; services.Columns["ホストパターン"]!.FillWeight = 200;
-        services.Columns["TCPポート"]!.FillWeight = 65; services.Columns["定義"]!.FillWeight = 85; services.Columns["注意・出典"]!.FillWeight = 180;
+        if (services.Columns["状態"]!.AutoSizeMode != DataGridViewAutoSizeColumnMode.None)
+        {
+            services.Columns["状態"]!.AutoSizeMode = DataGridViewAutoSizeColumnMode.None; services.Columns["状態"]!.Width = 100;
+            services.Columns["サービス"]!.FillWeight = 130; services.Columns["ホストパターン"]!.FillWeight = 200;
+            services.Columns["TCPポート"]!.FillWeight = 65; services.Columns["定義"]!.FillWeight = 85; services.Columns["注意・出典"]!.FillWeight = 180;
+        }
         var now = status?.TimeUtc ?? DateTimeOffset.UtcNow;
         var rules = DashboardRules.List(c, now);
         var operational = connected && orderedRules && status is { Healthy: true, Running: true };
@@ -434,8 +457,6 @@ public sealed partial class MainForm : Form
             row.DefaultCellStyle.SelectionBackColor = Color.FromArgb(232, 240, 253);
             row.DefaultCellStyle.SelectionForeColor = DashboardTheme.Ink;
         }
-        policies.Columns["状態"]!.FillWeight = 70; policies.Columns["対象端末 / IPv4・CIDR"]!.FillWeight = 145;
-        policies.Columns["許可サービス"]!.FillWeight = 90; policies.Columns["通常の許可時間"]!.FillWeight = 145; policies.Columns["現在の理由"]!.FillWeight = 140;
         UpdateRuleControls();
     }
     private string Local(DateTimeOffset utc)
@@ -593,11 +614,20 @@ public sealed partial class MainForm : Form
     private static NumericUpDown Number(int value, int min, int max) => new() { Minimum = min, Maximum = max, Value = Math.Clamp(value, min, max) };
 
     private IEnumerable<LogEntry> FilteredLogs() => logEntries.Where(e =>
-        (string.IsNullOrWhiteSpace(logSearch.Text) || $"{e.Peer} {e.Host} {e.Reason} {e.ServiceId} {e.Actor}".Contains(logSearch.Text, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrWhiteSpace(logSearch.Text) || $"{e.Peer} {e.Host} {e.RequestPath} {e.Reason} {e.ServiceId} {e.Actor}".Contains(logSearch.Text, StringComparison.OrdinalIgnoreCase)) &&
         (logKind.SelectedIndex == 0 || logKind.SelectedIndex == 1 && e.Allowed && e.Kind == "通信" || logKind.SelectedIndex == 2 && !e.Allowed || logKind.SelectedIndex == 3 && e.Kind == "監査") &&
         (!logFrom.Checked || ToLocalValue(e.TimeUtc).Date >= logFrom.Value.Date) && (!logTo.Checked || ToLocalValue(e.TimeUtc).Date <= logTo.Value.Date));
-    private void FilterLogs() => Fill(logGrid, ["時刻", "種別", "端末IP", "宛先ホスト", "ポート", "結果", "理由", "サービス", "バイト", "秒", "操作者SID"],
-        FilteredLogs().Select((e, i) => (i.ToString(CultureInfo.InvariantCulture), new object[] { Local(e.TimeUtc), e.Kind, e.Peer, e.Host, e.Port, e.Allowed ? "許可" : "拒否", e.Reason, e.ServiceId ?? "", e.Bytes, e.Seconds.ToString("F1"), e.Actor })));
+    private void FilterLogs()
+    {
+        Fill(logGrid, ["時刻", "種別", "端末IP", "宛先ホスト", "パス", "ポート", "結果", "理由", "サービス", "バイト", "秒", "操作者SID"],
+            FilteredLogs().Select((e, i) => (i.ToString(CultureInfo.InvariantCulture), new object[] { Local(e.TimeUtc), e.Kind, e.Peer, e.Host,
+                LogPath(e),
+                e.Kind == "通信" ? e.Port : "—", e.Kind == "監査" ? "—" : e.Allowed ? "許可" : "拒否", e.Reason, e.ServiceId ?? "",
+                e.Kind == "通信" ? e.Bytes : "—", e.Kind == "通信" ? e.Seconds.ToString("F1") : "—", e.Actor })));
+        LogTableTheme.ApplyRows(logGrid);
+    }
+    private static string LogPath(LogEntry entry) => entry.Kind != "通信" ? "—" : entry.IsTunnel ? "取得不可（CONNECT）" :
+        string.IsNullOrEmpty(entry.RequestPath) ? "未記録" : entry.RequestPath;
     private Task ExportLogs()
     {
         using var dialog = new SaveFileDialog { Filter = "CSVファイル|*.csv", FileName = "WhiteProxy-logs.csv" };
@@ -608,15 +638,15 @@ public sealed partial class MainForm : Form
             if (text.TrimStart().StartsWithAny('=', '+', '-', '@')) text = "'" + text;
             return "\"" + text.Replace("\"", "\"\"") + "\"";
         }
-        var lines = new List<string> { "UTC,種別,端末IP,ホスト,ポート,許可,理由,サービス,バイト,秒,操作者SID" };
-        lines.AddRange(FilteredLogs().Select(e => string.Join(',', new object?[] { e.TimeUtc.ToString("O"), e.Kind, e.Peer, e.Host, e.Port, e.Allowed, e.Reason, e.ServiceId, e.Bytes, e.Seconds, e.Actor }.Select(Csv))));
+        var lines = new List<string> { "UTC,種別,端末IP,ホスト,パス,ポート,許可,理由,サービス,バイト,秒,操作者SID" };
+        lines.AddRange(FilteredLogs().Select(e => string.Join(',', new object?[] { e.TimeUtc.ToString("O"), e.Kind, e.Peer, e.Host, LogPath(e), e.Port, e.Allowed, e.Reason, e.ServiceId, e.Bytes, e.Seconds, e.Actor }.Select(Csv))));
         File.WriteAllLines(dialog.FileName, lines, new UTF8Encoding(true)); return Task.CompletedTask;
     }
     private Task AddDeniedHost()
     {
         if (!CanEdit() || logGrid.CurrentRow is null) return Task.CompletedTask;
-        var host = Convert.ToString(logGrid.CurrentRow.Cells[3].Value);
-        var result = Convert.ToString(logGrid.CurrentRow.Cells[5].Value);
+        var host = Convert.ToString(logGrid.CurrentRow.Cells["宛先ホスト"].Value);
+        var result = Convert.ToString(logGrid.CurrentRow.Cells["結果"].Value);
         if (result != "拒否" || string.IsNullOrWhiteSpace(host)) { Info("宛先ホストがある拒否行を選択してください。"); return Task.CompletedTask; }
         using var form = new EditorDialog("拒否ログのホストを追加", 380);
         var c = JsonDefaults.Clone(current);
@@ -654,7 +684,11 @@ public sealed partial class MainForm : Form
         parent.Controls.Add(button);
         return button;
     }
-    private static DataGridView Grid() => new()
+    private sealed class BufferedGrid : DataGridView
+    {
+        public BufferedGrid() => DoubleBuffered = true;
+    }
+    private static DataGridView Grid() => new BufferedGrid()
     {
         Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, SelectionMode = DataGridViewSelectionMode.FullRowSelect,
@@ -667,12 +701,22 @@ public sealed partial class MainForm : Form
     };
     private static void Fill(DataGridView grid, string[] columns, IEnumerable<(string Key, object[] Values)> rows)
     {
+        if (grid.Columns.Count == 0) foreach (var column in columns) grid.Columns.Add(column, column);
+        var next = rows.ToList();
+        // 行構成が同じなら選択・スクロール・現在セルを保ったまま値だけを更新する。
+        if (grid.Rows.Count == next.Count && grid.Rows.Cast<DataGridViewRow>().Select(r => r.Tag as string).SequenceEqual(next.Select(r => r.Key)))
+        {
+            for (var i = 0; i < next.Count; i++)
+                for (var j = 0; j < next[i].Values.Length; j++)
+                    if (!Equals(grid.Rows[i].Cells[j].Value, next[i].Values[j]))
+                        grid.Rows[i].Cells[j].Value = next[i].Values[j];
+            return;
+        }
         var selected = grid.SelectedRows.Cast<DataGridViewRow>().Select(r => r.Tag as string).ToHashSet();
         var first = grid.FirstDisplayedScrollingRowIndex;
         grid.SuspendLayout();
-        if (grid.Columns.Count == 0) foreach (var column in columns) grid.Columns.Add(column, column);
         grid.Rows.Clear();
-        foreach (var row in rows) { var index = grid.Rows.Add(row.Values); grid.Rows[index].Tag = row.Key; }
+        foreach (var row in next) { var index = grid.Rows.Add(row.Values); grid.Rows[index].Tag = row.Key; }
         grid.ClearSelection(); foreach (DataGridViewRow row in grid.Rows) if (selected.Contains(row.Tag as string)) row.Selected = true;
         if (first >= 0 && first < grid.Rows.Count) grid.FirstDisplayedScrollingRowIndex = first;
         grid.ResumeLayout();

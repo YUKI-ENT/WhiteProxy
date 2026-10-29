@@ -38,6 +38,7 @@ public sealed class StorageTests : IDisposable
     {
         var repo = new ConfigurationRepository(directory);
         var c = Templates.CreateDefault(); c.SchemaVersion = 1;
+        c.Services.Add(new() { Id = "chatgpt", Name = "既存サービス", Hosts = ["chatgpt.com"] });
         c.Devices = [new() { Id = "pc", Address = "192.168.10.21" }, new() { Id = "subnet", Address = "192.168.10.0/24" }];
         c.Policies = [new() { DeviceId = "pc", ServiceId = "chatgpt", AlwaysAllow = true }, new() { DeviceId = "subnet", ServiceId = "chatgpt", Deny = true }];
         await repo.SaveAsync(c, default);
@@ -63,6 +64,28 @@ public sealed class StorageTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpPathsAndTunnelMarkersPersistAlongsideLegacyLogs()
+    {
+        var logDirectory = Path.Combine(directory, "logs");
+        Directory.CreateDirectory(logDirectory);
+        // 旧レコードは新しいパス・トンネル情報を持たない。
+        await File.WriteAllTextAsync(Path.Combine(logDirectory, "20261029-0000.jsonl"),
+            "{\"TimeUtc\":\"2026-10-29T00:00:00Z\",\"Kind\":\"通信\",\"Peer\":\"192.168.1.1\",\"Host\":\"old.example\",\"Port\":443,\"Allowed\":true,\"Reason\":\"legacy\"}\n");
+        await using (var logs = new LogStore(directory))
+        {
+            var legacy = Assert.Single(logs.Snapshot());
+            Assert.Empty(legacy.RequestPath);
+            Assert.False(legacy.IsTunnel);
+            logs.Add(new(DateTimeOffset.UtcNow, "通信", "192.168.1.1", "cdn.example", 80, false, "deny", RequestPath: "/assets/logo.svg"));
+            logs.Add(new(DateTimeOffset.UtcNow, "通信", "192.168.1.1", "cdn.example", 443, true, "allow", IsTunnel: true));
+        }
+        await using var reopened = new LogStore(directory);
+        Assert.True(reopened.Healthy);
+        Assert.Contains(reopened.Snapshot(), e => e.RequestPath == "/assets/logo.svg" && !e.Allowed && !e.IsTunnel);
+        Assert.Contains(reopened.Snapshot(), e => e.IsTunnel && e.RequestPath == "");
+    }
+
+    [Fact]
     public async Task LogWriteFailureBecomesVisibleAndUnhealthy()
     {
         await using var logs = new LogStore(directory);
@@ -79,7 +102,13 @@ public sealed class StorageTests : IDisposable
         var config = Templates.CreateDefault();
         Assert.Empty(config.Devices); Assert.Empty(config.Policies); Assert.Empty(config.TemporaryGrants);
         Assert.Empty(ConfigurationValidator.Validate(config));
-        Assert.Empty(config.Services.First(s => s.Id == "windows-update").Hosts);
+        var windows = Assert.Single(config.Services);
+        Assert.Equal("windows-update", windows.Id);
+        Assert.Equal("Windows Update", windows.Name);
+        Assert.Equal(20, windows.Hosts.Count);
+        Assert.Contains("*.windowsupdate.com", windows.Hosts);
+        Assert.Contains("oneocsp.microsoft.com", windows.Hosts);
+        Assert.Equal(new[] { 80, 443 }, windows.AllowedPorts);
         Assert.All(config.Services.Where(s => s.BuiltIn), s => Assert.NotEmpty(s.Source));
     }
     public void Dispose()

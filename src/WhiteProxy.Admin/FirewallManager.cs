@@ -14,6 +14,7 @@ internal sealed record FirewallPlan(string Executable, string LocalAddress, int 
 internal static class FirewallManager
 {
     internal const string RuleName = "WhiteProxy-Managed-Inbound";
+    internal const string WebRuleName = "WhiteProxy-Web-Control";
     internal static string ExecutablePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WhiteProxy", "WhiteProxy.exe");
 
     internal static FirewallPlan Plan(Configuration config)
@@ -49,15 +50,21 @@ internal static class FirewallManager
         return first.LocalAddress != second.LocalAddress || first.Port != second.Port || !first.Sources.Order().SequenceEqual(second.Sources.Order());
     }
 
-    internal static Task RemoveAsync() => Task.Run(() => Apply(null));
+    internal static Task RemoveAsync() => Task.Run(() => { Apply(null); Apply(null, WebRuleName); });
+    internal static Task<string> SyncWebAsync(bool enabled, int port) => Task.Run(() =>
+    {
+        if (port is < 1 or > 65535) throw new InvalidOperationException("Webポートが不正です。");
+        Apply(enabled ? new(ExecutablePath, "*", port, ["LocalSubnet"], "") : null, WebRuleName);
+        return enabled ? $"Web管理の受信許可：TCP {port} / ローカルサブネット / ドメイン・プライベート。" : "Web管理の受信許可を削除しました。";
+    });
 
-    internal static object CreateRule(FirewallPlan plan)
+    internal static object CreateRule(FirewallPlan plan, string name = RuleName)
     {
         var ruleObject = Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!)!;
         try
         {
             dynamic rule = ruleObject;
-            rule.Name = RuleName; rule.Description = "WhiteProxyが管理する受信許可。登録端末の送信元IP/CIDRに限定。";
+            rule.Name = name; rule.Description = name == WebRuleName ? "WhiteProxyのHTTPS管理画面。ローカルサブネット内のみ。パスワード認証必須。" : "WhiteProxyが管理する受信許可。登録端末の送信元IP/CIDRに限定。";
             rule.ApplicationName = plan.Executable;
             rule.Protocol = 6; rule.LocalPorts = plan.Port.ToString(CultureInfo.InvariantCulture);
             rule.LocalAddresses = plan.LocalAddress; rule.RemoteAddresses = string.Join(',', plan.Sources);
@@ -67,7 +74,7 @@ internal static class FirewallManager
         catch { Marshal.FinalReleaseComObject(ruleObject); throw; }
     }
 
-    private static void Apply(FirewallPlan? plan)
+    private static void Apply(FirewallPlan? plan, string ruleName = RuleName)
     {
         object? policyObject = null, rulesObject = null, ruleObject = null;
         try
@@ -76,10 +83,10 @@ internal static class FirewallManager
             dynamic policy = policyObject!; rulesObject = policy.Rules; dynamic rules = rulesObject;
             if (plan is { AllowInbound: true })
             {
-                ruleObject = CreateRule(plan);
+                ruleObject = CreateRule(plan, ruleName);
             }
             // 他アプリや手動作成ルールには触れない。作り直し失敗時も広い旧ルールを残さない。
-            try { rules.Remove(RuleName); }
+            try { rules.Remove(ruleName); }
             catch (COMException ex) when (ex.HResult == unchecked((int)0x80070002)) { }
             if (ruleObject is not null) rules.Add((dynamic)ruleObject);
         }

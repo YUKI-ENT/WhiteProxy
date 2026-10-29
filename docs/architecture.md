@@ -1,8 +1,10 @@
-# WhiteProxy 構成・Phase 0検証
+# WhiteProxy 構成
 
 確認日: 2026-10-26。元仕様書の製品名・ソリューション名はユーザー指示によりWhiteProxyへ変更。インストーラー要件は単一EXE発行へ変更。
 
 ## 分割
+
+WebコントロールはService内のASP.NET Core/Kestrelで提供します。プロキシーとは別のHTTPSポート（初期3129）を使用し、静的HTML/CSS/JSをEXEへ同梱します。GUIとWebはProxyWorkerの同じ検証・直列化・保存・適用経路を呼び出します。順序付きルールの表示・評価補助はCoreのDashboardRulesに共通化しています。Webの認証設定・パスワードハッシュ・TLS証明書は一般のConfigurationと分離し、読取りIPCへ秘密情報を公開しません。詳細は [Webコントロール](web-control.md) を参照してください。
 
 | プロジェクト | 責務 |
 |---|---|

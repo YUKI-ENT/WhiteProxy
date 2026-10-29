@@ -12,7 +12,7 @@ internal static class Program
     private static void Main(string[] args)
     {
         var mode = StartupPolicy.Mode(args);
-        if (mode == ApplicationMode.Gui && GuiInstance.ActivateExisting()) return;
+        if (mode == ApplicationMode.Gui && !args.Contains("--tray") && GuiInstance.ActivateExisting()) return;
         if (StartupPolicy.NeedsElevation(mode, IsAdmin()))
         {
             if (Debugger.IsAttached && mode is ApplicationMode.Gui or ApplicationMode.Console)
@@ -45,6 +45,12 @@ internal static class Program
             }
             return;
         }
+        if (args.SequenceEqual(["--sync-firewall"]))
+        {
+            try { Task.Run(() => ServiceOperations.ExecuteAsync("sync-firewall")).GetAwaiter().GetResult(); }
+            catch (Exception ex) { Environment.ExitCode = 1; Console.Error.WriteLine("Firewall再同期失敗: " + ex.GetType().Name); }
+            return;
+        }
         ApplicationConfiguration.Initialize();
         if (mode == ApplicationMode.ServiceManagement)
         {
@@ -59,10 +65,11 @@ internal static class Program
         using var instance = new GuiInstance();
         if (!instance.Acquired)
         {
+            if (args.Contains("--tray")) return;
             if (!GuiInstance.ActivateExisting()) MessageBox.Show("管理GUIは既に起動中です。画面が開くまでお待ちください。", "WhiteProxy", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        Application.Run(new MainForm(openSettings: args.Contains("--settings")));
+        Application.Run(new MainForm(openSettings: args.Contains("--settings"), startInTray: args.Contains("--tray")));
     }
     internal static bool IsAdmin()
     {

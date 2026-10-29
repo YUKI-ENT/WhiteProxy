@@ -49,7 +49,8 @@ internal sealed class EditorDialog : Form
         return control;
     }
     public TextBox TextField(string label, string text, bool multiline = false, int height = 40)
-        => Add(label, new TextBox { Text = text, Multiline = multiline, ScrollBars = multiline ? ScrollBars.Vertical : ScrollBars.None }, height);
+        => Add(label, new TextBox { Text = text, Multiline = multiline, AcceptsReturn = multiline,
+            ScrollBars = multiline ? ScrollBars.Vertical : ScrollBars.None }, height);
     internal void SetRowVisible(Control control, bool visible, int height)
     {
         var index = table.GetRow(control);

@@ -14,6 +14,7 @@ internal static class ServiceOperations
         if (!Program.IsAdmin()) throw new InvalidOperationException("Windows管理者権限が必要です。");
         switch (operation)
         {
+            case "sync-firewall": return await SyncSavedFirewallAsync();
             case "setup":
             case "register":
                 var controllers = System.ServiceProcess.ServiceController.GetServices();
@@ -49,7 +50,9 @@ internal static class ServiceOperations
                     environment.Add("DOTNET_BUNDLE_EXTRACT_BASE_DIR=" + Path.Combine(ServiceHost.DataDirectory, "runtime"));
                     serviceKey.SetValue("Environment", environment.ToArray(), RegistryValueKind.MultiString);
                 }
+                FirewallSyncTask.Register(executable);
                 var setupFirewall = await SyncSavedFirewallAsync();
+                await TrayAutostart.RegisterAsync(executable);
                 StartupReport.Write(ServiceHost.DataDirectory, "サービス登録", "Registered", "登録済み・停止中");
                 if (operation == "setup")
                 {
@@ -79,6 +82,8 @@ internal static class ServiceOperations
                     { controller.Stop(); controller.WaitForStatus(System.ServiceProcess.ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30)); }
                 }
                 await FirewallManager.RemoveAsync();
+                FirewallSyncTask.Remove();
+                await TrayAutostart.RemoveAsync();
                 await Sc("delete", "WhiteProxy"); break;
             default: throw new ArgumentException("未対応のサービス操作です。");
         }
@@ -89,13 +94,18 @@ internal static class ServiceOperations
         var repository = new ConfigurationRepository(ServiceHost.DataDirectory);
         var config = File.Exists(repository.FilePath) ? await repository.LoadAsync(default) :
             File.Exists(repository.FilePath + ".bak") ? throw new InvalidOperationException("設定の現行ファイルがありません。バックアップを確認して復旧してください。") : Templates.CreateDefault();
-        try { return await FirewallManager.SyncAsync(config); }
+        try
+        {
+            var proxy = await FirewallManager.SyncAsync(config);
+            var web = new WebControlStore(ServiceHost.DataDirectory).ReadStatus();
+            return proxy + "\n" + await FirewallManager.SyncWebAsync(web.Enabled, web.Port);
+        }
         catch (InvalidOperationException ex) { StartupReport.TryWriteFailure(ServiceHost.DataDirectory, "Windows Firewallの自動設定", ex); throw; }
     }
     internal static async Task WaitForConnectionAsync()
     {
         var elapsed = Stopwatch.StartNew();
-        while (elapsed.Elapsed < TimeSpan.FromSeconds(30))
+        while (elapsed.Elapsed < TimeSpan.FromSeconds(150))
         {
             var installation = ServiceDiagnostics.Inspect();
             if (!installation.Installed || installation.State == "Stopped")
@@ -106,8 +116,9 @@ internal static class ServiceOperations
                 var response = await new PipeClient().SendAsync(new() { Operation = "status" }, ct: timeout.Token);
                 if (response.Success && response.Status is { } status)
                 {
-                    if (!status.Healthy || !status.Running) throw new InvalidOperationException("管理接続はできましたがプロキシーは異常状態です。\n" + status.Error);
-                    return;
+                    if (status.Healthy && status.Running) return;
+                    if (StartupReport.Read(ServiceHost.DataDirectory)?.State != "Retrying")
+                        throw new InvalidOperationException("管理接続はできましたがプロキシーは異常状態です。\n" + status.Error);
                 }
             }
             catch (Exception ex) when (ex is IOException or OperationCanceledException or UnauthorizedAccessException) { }

@@ -1,0 +1,39 @@
+{
+  "format": "WhiteProxy.ServicePack",
+  "version": 1,
+  "name": "Windows Update",
+  "services": [
+    {
+      "name": "Windows Update",
+      "hosts": [
+        "*.windowsupdate.com",
+        "*.update.microsoft.com",
+        "*.windowsupdate.microsoft.com",
+        "*.download.microsoft.com",
+        "*.mp.microsoft.com",
+        "*.emdl.ws.microsoft.com",
+        "settings-win.data.microsoft.com",
+        "fd.api.iris.microsoft.com",
+        "*.windows.com",
+        "*.microsoftedge.microsoft.com",
+        "*.msftconnecttest.com",
+        "*.msftncsi.com",
+        "*.officecdn.microsoft.com",
+        "*.officecdn.microsoft.com.edgesuite.net",
+        "*.officeapps.live.com",
+        "*.definitionupdates.microsoft.com",
+        "*.go.microsoft.com",
+        "*.digicert.com",
+        "crl.microsoft.com",
+        "oneocsp.microsoft.com"
+      ],
+      "allowedPorts": [
+        80,
+        443
+      ],
+      "source": "https://learn.microsoft.com/en-us/windows/deployment/do/delivery-optimization-proxy",
+      "definitionVersion": "2026-10-26",
+      "notes": "初期候補・完全な接続先を保証しません。 未設定・必ず拒否。実環境のMicrosoft公開資料を確認して許可先を追加してください。更新完了検出ではなく指定時間枠のみ開放。Defenderと重複する場合があります。"
+    }
+  ]
+}

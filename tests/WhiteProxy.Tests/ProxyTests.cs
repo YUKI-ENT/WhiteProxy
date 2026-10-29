@@ -101,6 +101,55 @@ public class ProxyTests
         proxy.Sweep();
         await AssertClosed(stream);
         Assert.Equal(0, proxy.SessionCount);
+        Assert.All(events.Where(e => e.Host == "127.0.0.1"), e =>
+        {
+            Assert.True(e.IsTunnel);
+            Assert.Empty(e.RequestPath);
+        });
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task HttpLogsEscapedPathForAllowedAndDeniedRequestsWithoutQuery(bool allowed, bool longPath)
+    {
+        var path = longPath ? "/" + new string('a', 2300) : "/assets/logo%3Fsmall.svg";
+        var expectedPath = longPath ? path[..2047] + "…" : path;
+        var clock = new ManualClock();
+        using var origin = new TcpListener(IPAddress.Loopback, 0); origin.Start();
+        var port = ((IPEndPoint)origin.LocalEndpoint).Port;
+        var config = Config(FreePort(), port, clock);
+        if (!allowed) config.Services[0].Hosts = ["other.example"];
+        var events = new System.Collections.Concurrent.ConcurrentQueue<TrafficEvent>();
+        var finished = new TaskCompletionSource<TrafficEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var proxy = new ProxyEngine(() => config, clock, entry =>
+        {
+            events.Enqueue(entry);
+            if (entry.Reason == "通信終了") finished.TrySetResult(entry);
+        }, false);
+        proxy.Start();
+        var originTask = allowed ? Task.Run(async () =>
+        {
+            using var server = await origin.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await ReadHeaders(server.GetStream());
+            await server.GetStream().WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"u8.ToArray());
+        }) : Task.CompletedTask;
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, config.Proxy.Port);
+        await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(
+            $"GET http://127.0.0.1:{port}{path}?token=SECRET-QUERY HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: SECRET-COOKIE\r\nConnection: close\r\n\r\n"));
+        Assert.Contains(allowed ? "200" : "403", await ReadHeaders(client.GetStream()));
+        await originTask;
+        if (allowed)
+            Assert.Equal(expectedPath, (await finished.Task.WaitAsync(TimeSpan.FromSeconds(5))).RequestPath);
+        else Assert.False(origin.Pending());
+        var request = Assert.Single(events, e => e.Host == "127.0.0.1" && e.Reason != "通信終了" && e.Reason != "接続終了");
+        Assert.Equal(allowed, request.Allowed);
+        Assert.Equal(expectedPath, request.RequestPath);
+        Assert.False(request.IsTunnel);
+        Assert.DoesNotContain("SECRET", System.Text.Json.JsonSerializer.Serialize(events));
     }
 
     [Theory]

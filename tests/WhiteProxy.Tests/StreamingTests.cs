@@ -145,6 +145,7 @@ public class StreamingTests
         clock.UtcNow = clock.UtcNow.AddMinutes(90); proxy.Sweep();
         await ProxyTests.AssertClosed(stream);
         Assert.DoesNotContain("SECRET", System.Text.Json.JsonSerializer.Serialize(events));
+        Assert.All(events.Where(e => e.Host == "127.0.0.1"), e => Assert.Equal("/stream", e.RequestPath));
         await source.WaitAsync(TimeSpan.FromSeconds(5));
     }
 

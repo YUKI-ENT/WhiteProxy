@@ -64,6 +64,7 @@ public class ServiceUiStateTests
     public void StoppedSettingsPreservePoliciesGrantsAndGlobalBlock()
     {
         var original = Templates.CreateDefault();
+        original.Services.Add(new() { Id = "chatgpt", Name = "既存サービス", Hosts = ["chatgpt.com"] });
         original.Revision = 10; original.Proxy.GlobalBlock = true;
         original.Devices.Add(new() { Id = "pc", Address = "192.168.10.21" });
         original.Policies.Add(new() { DeviceId = "pc", ServiceId = "chatgpt", AlwaysAllow = true });
