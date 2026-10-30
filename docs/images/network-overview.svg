@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="960" viewBox="0 0 1400 960" role="img" aria-labelledby="title desc">
 <title id="title">WhiteProxy 院内ネットワーク構成例</title>
-<desc id="desc">VLAN1内にWhiteProxyを配置。オレンジはVLAN2の端末からRTX830を介したWhiteProxyへの接続、緑はWhiteProxyからRTX830を介したインターネットへの接続を表す。</desc>
+<desc id="desc">VLAN1内にWhiteProxyを配置。オレンジはVLAN2の端末からルーターを介したWhiteProxyへの接続、緑はWhiteProxyからルーターを介したインターネットへの接続を表す。</desc>
 <defs>
   <linearGradient id="page" x2="0" y2="1"><stop stop-color="#f8fafc"/><stop offset="1" stop-color="#eef3f9"/></linearGradient>
   <linearGradient id="blueZone" x2="0" y2="1"><stop stop-color="#eaf4ff"/><stop offset="1" stop-color="#f7fbff"/></linearGradient>
@@ -26,6 +26,16 @@
     <rect x="20" y="38" width="33" height="7" rx="2" fill="#6a8198"/>
     <circle cx="46" cy="87" r="4" fill="#21a77d"/>
   </symbol>
+  <marker id="orangeFlow" markerWidth="36" markerHeight="36" refX="31" refY="16" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 32 16 0 32 8 16z" fill="#df741d"/></marker>
+  <marker id="greenFlow" markerWidth="36" markerHeight="36" refX="31" refY="16" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 32 16 0 32 8 16z" fill="#168365"/></marker>
+  <symbol id="whiteproxy-icon" viewBox="0 0 256 256">
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="#26364b"/>
+  <g fill="none" stroke="white" stroke-width="12">
+    <rect x="100" y="58" width="56" height="140" rx="20"/>
+    <path d="M52 128h152 M126 110l18 18-18 18"/>
+  </g>
+  <g fill="white"><circle cx="52" cy="128" r="12"/><circle cx="204" cy="128" r="12"/></g>
+</symbol>
 </defs>
 <rect width="1400" height="960" rx="24" fill="url(#page)"/>
 <g font-family="'Yu Gothic','Meiryo',sans-serif" fill="#20364f">
@@ -39,19 +49,10 @@
   </g>
   <text x="694" y="98" text-anchor="middle" font-size="23" font-weight="700">インターネット</text>
   <text x="694" y="125" text-anchor="middle" font-size="14" fill="#60758b">Windows Update・許可したWebサイト</text>
-  <path d="M710 218V158" stroke="#168365" stroke-width="7" stroke-linecap="round" marker-end="url(#greenArrow)" fill="none"/>
   <text x="737" y="190" font-size="15" fill="#168365" font-weight="700">許可先への通信</text>
 
-  <g filter="url(#shadow)">
-    <path d="m590 240 30-20h180l30 20v72l-24 22H590z" fill="#283e5d"/>
-    <path d="m590 240 30-20h180l30 20z" fill="#607b9c"/>
-    <path d="M590 240h240v45H590z" fill="#3c5677"/>
-    <path d="M590 285h240v27l-24 22H590z" fill="#20324e"/>
-    <g fill="#a5b9ca"><rect x="605" y="296" width="19" height="10" rx="2"/><rect x="630" y="296" width="19" height="10" rx="2"/><rect x="655" y="296" width="19" height="10" rx="2"/><rect x="680" y="296" width="19" height="10" rx="2"/></g>
-    <circle cx="802" cy="301" r="4" fill="#55d797"/>
-    <text x="710" y="270" text-anchor="middle" fill="#fff" font-size="22" font-weight="700">RTX830</text>
-  </g>
-  <text x="465" y="360" text-anchor="end" font-size="16" font-weight="700">VLAN間の通信を制限</text>
+
+  <text x="465" y="360" text-anchor="end" font-size="16" font-weight="700">VLAN間の通信を許可</text>
   <text x="465" y="387" text-anchor="end" font-size="14" fill="#60758b">プロキシー用 TCP 3128</text>
   <text x="465" y="410" text-anchor="end" font-size="14" fill="#60758b">Web管理用 TCP 3129</text>
 
@@ -66,15 +67,25 @@
   <text x="901" y="485" font-size="23" font-weight="700">閉鎖電子カルテゾーン</text>
   <text x="798" y="519" font-size="16" fill="#8c725c">192.168.20.0/24</text>
 
-  <!-- 接続開始方向。応答は省略。ルーターで中継する2区間を描く -->
-  <path d="M862 590H750V340" fill="none" stroke="#df741d" stroke-width="7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#orangeArrow)"/>
-  <path d="M680 340V590H516" fill="none" stroke="#df741d" stroke-width="7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#orangeArrow)"/>
-  <path d="M516 650H720V340" fill="none" stroke="#168365" stroke-width="7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#greenArrow)"/>
-
+  <!-- 接続開始方向を連続した経路で表示。ルーターを通過する部分は機器の背面へ -->
+  <path d="M862 590H780Q750 590 750 560V350Q750 305 720 305H710Q680 305 680 335V560Q680 590 650 590H516" fill="none" stroke="#df741d" stroke-width="10" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#orangeFlow)"/>
+  <path d="M516 650H690Q720 650 720 620V158" fill="none" stroke="#168365" stroke-width="10" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#greenFlow)"/>
+  <path d="m750 418-13 20h26z" fill="#df741d"/>
+  <path d="m680 499-13-20h26z" fill="#df741d"/>
+  <path d="m720 418-13 20h26z" fill="#168365"/>
+  <g filter="url(#shadow)">
+    <path d="m590 240 30-20h180l30 20v72l-24 22H590z" fill="#283e5d"/>
+    <path d="m590 240 30-20h180l30 20z" fill="#607b9c"/>
+    <path d="M590 240h240v45H590z" fill="#3c5677"/>
+    <path d="M590 285h240v27l-24 22H590z" fill="#20324e"/>
+    <g fill="#a5b9ca"><rect x="605" y="296" width="19" height="10" rx="2"/><rect x="630" y="296" width="19" height="10" rx="2"/><rect x="655" y="296" width="19" height="10" rx="2"/><rect x="680" y="296" width="19" height="10" rx="2"/></g>
+    <circle cx="802" cy="301" r="4" fill="#55d797"/>
+    <text x="710" y="270" text-anchor="middle" fill="#fff" font-size="22" font-weight="700">ルーター</text>
+  </g>
   <g filter="url(#shadow)"><rect x="86" y="554" width="424" height="164" rx="17" fill="#fff" stroke="#5b9ed2" stroke-width="2"/></g>
   <use href="#pc" x="105" y="576" width="136" height="109"/>
-  <path d="m204 620 14-6 14 6v14c0 13-14 20-14 20s-14-7-14-20z" fill="#1b9e78" stroke="#fff" stroke-width="2"/>
-  <path d="m211 633 5 5 9-11" fill="none" stroke="#fff" stroke-width="3"/>
+  <rect x="141" y="610" width="62" height="62" rx="15" fill="#fff"/>
+  <use href="#whiteproxy-icon" x="144" y="613" width="56" height="56"/>
   <text x="258" y="591" font-size="25" font-weight="700">WhiteProxy</text>
   <text x="258" y="619" font-size="17" fill="#426580">Windows PC</text>
   <text x="258" y="647" font-size="18" font-weight="700">192.168.10.10</text>
@@ -97,10 +108,10 @@
 
   <rect x="40" y="868" width="1320" height="68" rx="15" fill="#fff" stroke="#d9e3ee"/>
   <path d="M65 891h48" stroke="#df741d" stroke-width="6" marker-end="url(#orangeArrow)"/>
-  <text x="129" y="897" font-size="16" font-weight="700" fill="#b95d14">端末 → RTX830 → WhiteProxy</text>
+  <text x="129" y="897" font-size="16" font-weight="700" fill="#b95d14">端末 → ルーター → WhiteProxy</text>
   <path d="M510 891h48" stroke="#168365" stroke-width="6" marker-end="url(#greenArrow)"/>
-  <text x="574" y="897" font-size="16" font-weight="700" fill="#168365">WhiteProxy → RTX830 → インターネット</text>
-  <text x="65" y="922" font-size="13" fill="#60758b">矢印は接続開始方向（応答は省略）。VLAN2からインターネットへの直接通信はルーターで遮断します。</text>
+  <text x="574" y="897" font-size="16" font-weight="700" fill="#168365">WhiteProxy → ルーター → インターネット</text>
+  <text x="65" y="922" font-size="12" fill="#60758b">矢印は通信の流れ（要求方向・応答は省略）。ルーターでは必要なVLAN間通信を許可し、VLAN2からの直接外部通信を遮断します。</text>
   <text x="1327" y="920" text-anchor="end" font-size="13" fill="#7b8d9e">構成例 / IPv4</text>
 </g>
 </svg>

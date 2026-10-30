@@ -4,11 +4,11 @@
 
 ## 1. 院内VLAN構成例と配置
 
-WhiteProxyを動かすWindows PCを、**VLAN1（インターネット可能ゾーン）** に置きます。VLAN2（閉鎖電子カルテゾーン）の端末は、RTX830を経由してこのPCに接続します。プロキシー用PCのLAN接続はVLAN1だけで構いません。
+WhiteProxyを動かすWindows PCを、**VLAN1（インターネット可能ゾーン）** に置きます。VLAN2（閉鎖電子カルテゾーン）の端末は、ルーターを経由してこのPCに接続します。プロキシー用PCのLAN接続はVLAN1だけで構いません。
 
-![VLAN1とVLAN2を分けた院内ネットワーク図。VLAN2の端末からRTX830を経由してVLAN1のWhiteProxyへ接続する。](images/network-overview.png)
+![VLAN1とVLAN2を分けた院内ネットワーク図。VLAN2の端末からルーターを経由してVLAN1のWhiteProxyへ接続する。](images/network-overview.png)
 
-**オレンジの矢印**は端末からRTX830を経由してWhiteProxyへ接続する流れ、**緑の矢印**はWhiteProxyからRTX830を経由してインターネットへ接続する流れです。応答方向の矢印は省略しています。
+**オレンジの矢印**は端末からルーターを経由してWhiteProxyへ接続する流れ、**緑の矢印**はWhiteProxyからルーターを経由してインターネットへ接続する流れです。応答方向の矢印は省略しています。
 
 | 項目 | このガイドの例 |
 | --- | --- |
