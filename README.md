@@ -10,6 +10,12 @@
 
 ![VLAN1内のWhiteProxyへ、VLAN2からルーターを介して接続する構成例。オレンジは端末からプロキシーへの接続、緑はプロキシーからインターネットへの接続。](docs/images/network-overview.png)
 
+
+管理画面
+
+<img width="1266" height="853" alt="image" src="https://github.com/user-attachments/assets/7f450863-966d-4d4f-b84f-7ecec947f00c" />
+
+
 **初めて使う方は [導入・操作ガイド](docs/user-guide.md) をお読みください。** VLAN1をインターネット可能ゾーン、VLAN2を閉鎖電子カルテゾーンとした例で、設置から日常操作まで説明しています。
 
 1. 院内VLAN構成例とWhiteProxyの配置
