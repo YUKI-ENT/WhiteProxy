@@ -34,34 +34,41 @@ IPアドレスは院内の実際の値に置き換えてください。WhiteProx
 | --- | --- | --- |
 | VLAN2の利用端末 | WhiteProxy用PC `192.168.10.10` | TCP 3128（プロキシー） |
 | Web管理端末 `192.168.20.50` | 同じPC | TCP 3129（Web管理を使う場合） |
-| WhiteProxy用PC | 上記端末 | 上記通信への応答 |
+| WhiteProxy用PC | 上記端末 | 上記通信への応答（動的フィルターで自動許可） |
 | VLAN2 | その他のVLAN・インターネット | 原則遮断。既存業務に必要な通信は個別に許可 |
 
-### フィルター設定例
+### フィルター設定例（動的フィルター）
 
 次は、VLANが設定済みで、VLAN2のインターフェース名が **`lan1/1`** の場合のIPv4設定例です。`lan1/1` はヤマハのインターフェース名で、VLAN番号の「1」を意味するものではありません。実機のVLAN2が `vlan2` などの場合は読み替えます。
+
+**VLAN2から許可した接続を開始すると、その接続の戻り通信も自動的に通します。** WhiteProxy側からVLAN2へ別の接続を開始することは許可しません。静的フィルターで接続先を絞り、動的フィルターで接続状態を追跡します。
 
 **既存設定をバックアップし、管理接続を復旧できる状態で作業してください。** 下の適用コマンドは、そのインターフェースの既存フィルター一覧を置き換えます。稼働中の院内ルーターへそのまま投入せず、DNS・DHCP・時刻同期・別VLANの業務サーバー・ルーター管理など、必要な既存許可を残して組み込みます。フィルター番号も未使用のものに変更してください。
 
 ```text
-# VLAN2からWhiteProxyへの接続
+# 静的フィルター：VLAN2から開始できる接続先を限定
 ip filter 210100 pass 192.168.20.0/24 192.168.10.10 tcp * 3128
 ip filter 210110 pass 192.168.20.50 192.168.10.10 tcp * 3129
 # これ以外のVLAN2からのルーティング通信を拒否
 ip filter 210199 reject * * * * *
 
-# WhiteProxyからVLAN2への応答
-ip filter 210200 pass 192.168.10.10 192.168.20.0/24 established 3128 *
-ip filter 210210 pass 192.168.10.10 192.168.20.50 established 3129 *
-# これ以外のVLAN2へのルーティング通信を拒否
+# 動的フィルター：上記のTCPポートへの接続と、その戻りを追跡
+ip filter dynamic 210300 192.168.20.0/24 192.168.10.10 filter 210100
+ip filter dynamic 210310 192.168.20.50 192.168.10.10 filter 210110
+
+# VLAN2への新規接続は拒否（追跡済みの戻り通信は動的フィルターで通過）
 ip filter 210299 reject * * * * *
 
 # VLAN2側インターフェースに適用（既存の必要な許可も一覧に含める）
-ip lan1/1 secure filter in 210100 210110 210199
-ip lan1/1 secure filter out 210200 210210 210299
+ip lan1/1 secure filter in 210100 210110 210199 dynamic 210300 210310
+ip lan1/1 secure filter out 210299
 ```
 
-`in` はVLAN2からルーターへ入る通信、`out` はルーターからVLAN2へ出る通信です。Web管理を使わない場合は3129の2規則と適用一覧の対応番号を省きます。VLAN1側にもフィルターがある場合は、同じ通信を通す設定が必要です。`established` はTCPのACK/RSTフラグによる判定で、接続履歴の照合ではありません。仕様は [ヤマハ公式：IPフィルター](https://www.rtpro.yamaha.co.jp/RT/manual/rt-common/ip/ip_filter.html)、[適用方向と評価順](https://www.rtpro.yamaha.co.jp/RT/manual/rt-common/ip/ip_interface_secure_filter.html)、[establishedの説明](https://www.rtpro.yamaha.co.jp/RT/FAQ/IP-Filter/ip-filter-established.html) を参照してください。
+`in` はVLAN2からルーターへ入る通信、`out` はルーターからVLAN2へ出る通信です。接続を開始する `in` 側に動的フィルターを適用すると、対応する戻り通信は `out` 側の拒否規則より優先して通ります。戻り用の `established` 許可規則は不要です。動的フィルターだけでは不要な通信を拒否できないため、静的な許可・拒否規則も残します。
+
+動的フィルターの `filter 210100`／`filter 210110` は、参照先のTCP・ポート条件を使います。参照先のIP条件は動的フィルターでは使われないため、`ip filter dynamic` 自体にも接続元・接続先IPを指定しています。Web管理を使わない場合は静的規則 `210110`、動的規則 `210310` と、`in` の適用一覧の対応番号を省きます。
+
+VLAN1側にもフィルターがある場合は、そのインターフェースでも必要な往復通信を通す設定が必要です。この例の動的フィルターはVLAN2側に適用するもので、別のインターフェースの遮断設定まで解除するものではありません。仕様は [ヤマハ公式：動的フィルターの定義](https://www.rtpro.yamaha.co.jp/RT/manual/rt-common/ip/ip_filter_dynamic.html)、[動的フィルターの動作と適用例](https://www.rtpro.yamaha.co.jp/RT/docs/firewall/index.html)、[適用方向と評価順](https://www.rtpro.yamaha.co.jp/RT/manual/rt-common/ip/ip_interface_secure_filter.html) を参照してください。
 
 この例はIPv4用です。VLAN2にIPv6のインターネット経路がある場合は、IPv6側の出口も制限します。WAN接続・NAT・VLAN自体の作成は既存構成に合わせます。タグVLANの説明は [ヤマハ公式：VLAN](https://www.rtpro.yamaha.co.jp/RT/docs/vlan/) にあります。
 
