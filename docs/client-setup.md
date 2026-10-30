@@ -25,9 +25,9 @@ netsh winhttp import proxy source=ie
 
 [DOの公式プロキシー要件](https://learn.microsoft.com/en-us/windows/deployment/do/delivery-optimization-proxy) では、DOクラウドサービスへの直接接続や、クライアントの公開IPを隠すプロキシーなどに対するバイパス推奨、証明書ピンニングの制約が説明されています。WhiteProxyはTLSを復号しませんが、ネットワーク構成による制約がなくなるわけではありません。直接通信を禁止する設計では、必要な例外と時間制御をVLAN境界FWも含めて決めてください。
 
-## WU/Defenderテンプレート
+## Windows Updateの初期サービス
 
-初期のWindows UpdateとDefenderのホスト一覧は空で、通信は拒否します。実際のMicrosoft公式資料、対象OS・更新方式・拒否ログを確認したうえで管理者がホストを登録してください。`*.microsoft.com` などをまとめて推測登録しません。
+新規設定にはWindows Updateのサービス1件（20ホスト、TCP 80/443）を同梱しています。端末・有効な許可ルールを追加するまでは通信を許可しません。既存設定のサービスは更新時に上書きしません。Defender用の独立した初期サービスはありません。対象OS・更新方式・拒否ログを確認し、必要な接続先を調整してください。
 
 [Defenderネットワーク資料](https://learn.microsoft.com/en-us/defender-endpoint/configure-network-connections-microsoft-defender-antivirus) はクラウド保護と更新方式の違いも説明しています。Defender for Endpoint導入環境は同資料から該当する接続要件を参照してください。WUとDefenderが同じホストを使う場合、ホスト単位プロキシーでは機能を分離できません。
 
