@@ -6,15 +6,9 @@
 
 WhiteProxyを動かすWindows PCを、**VLAN1（インターネット可能ゾーン）** に置きます。VLAN2（閉鎖電子カルテゾーン）の端末は、RTX830を経由してこのPCに接続します。プロキシー用PCのLAN接続はVLAN1だけで構いません。
 
-```mermaid
-flowchart TB
-    Internet[インターネット] --- Router[RTX830]
-    Router --- V1[VLAN1：インターネット可能ゾーン]
-    Router --- V2[VLAN2：閉鎖電子カルテゾーン]
-    V1 --- Proxy[WhiteProxy用Windows PC<br/>192.168.10.10]
-    V2 --- Client[利用端末<br/>192.168.20.21]
-    V2 --- Admin[Web管理端末<br/>192.168.20.50]
-```
+![VLAN1とVLAN2を分けた院内ネットワーク図。VLAN2の端末からRTX830を経由してVLAN1のWhiteProxyへ接続する。](images/network-overview.png)
+
+**オレンジの矢印**は端末からRTX830を経由してWhiteProxyへ接続する流れ、**緑の矢印**はWhiteProxyからRTX830を経由してインターネットへ接続する流れです。応答方向の矢印は省略しています。
 
 | 項目 | このガイドの例 |
 | --- | --- |
