@@ -13,6 +13,27 @@ namespace WhiteProxy.Windows.Tests;
 
 public class WebControlTests
 {
+    [Theory]
+    [InlineData("12345", true)]
+    [InlineData("abcde", true)]
+    [InlineData("1234", false)]
+    [InlineData("     ", false)]
+    public void PasswordAcceptsFiveCharactersWithoutCompositionRequirements(string password, bool accepted)
+    {
+        var root = NewRoot();
+        try
+        {
+            var store = new WebControlStore(root);
+            if (accepted)
+            {
+                var options = store.Prepare(new() { Enabled = true, Password = password }, 3128);
+                Assert.True(WebControlStore.Verify(options, password));
+            }
+            else Assert.Throws<InvalidOperationException>(() => store.Prepare(new() { Enabled = true, Password = password }, 3128));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     [Fact]
     public void PasswordStoreDefaultsToDisabledAndHashesAndPreservesPassword()
     {
@@ -22,7 +43,7 @@ public class WebControlTests
             var store = new WebControlStore(root);
             Assert.False(store.Read().Enabled); Assert.Equal(3129, store.Read().Port);
             Assert.Throws<InvalidOperationException>(() => store.Prepare(new() { Enabled = true }, 3128));
-            Assert.Throws<InvalidOperationException>(() => store.Prepare(new() { Enabled = true, Password = "short" }, 3128));
+            Assert.Throws<InvalidOperationException>(() => store.Prepare(new() { Enabled = true, Password = "tiny" }, 3128));
             Assert.Throws<InvalidOperationException>(() => store.Prepare(new() { Enabled = true, Password = Password, Port = 3128 }, 3128));
             var first = store.Prepare(new() { Enabled = true, Password = Password }, 3128); store.Save(first);
             Assert.True(WebControlStore.Verify(store.Read(), Password));
@@ -100,6 +121,21 @@ public class WebControlTests
         var invalid = JsonDefaults.Clone(revoke.Configuration); invalid.Services[0].Hosts = ["https://example.com"];
         Assert.False((await f.Command(new() { Operation = "apply", ExpectedRevision = 3, Configuration = invalid }, HttpStatusCode.Conflict)).Success);
         Assert.Equal(3, (await f.Repository.LoadAsync(default)).Revision);
+    }
+
+    [Fact]
+    public async Task LoginSurvivesThirtyMinutesAndExpiresAtTwentyFourHours()
+    {
+        var clock = new SessionClock();
+        await using var f = await Fixture.Create(clock);
+        using var login = await f.Login();
+        Assert.Contains(login.Headers.GetValues("Set-Cookie"), cookie => cookie.Contains("max-age=86400", StringComparison.OrdinalIgnoreCase));
+        clock.Advance(TimeSpan.FromMinutes(31));
+        Assert.True((await f.State()).Success);
+        clock.Advance(TimeSpan.FromHours(23) + TimeSpan.FromMinutes(28));
+        Assert.True((await f.State()).Success);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await f.Client.GetAsync("api/status")).StatusCode);
     }
 
     [Fact]
@@ -242,7 +278,7 @@ public class WebControlTests
         internal string Csrf = "";
         internal int ProxyPort, WebPort;
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
-        internal static async Task<Fixture> Create()
+        internal static async Task<Fixture> Create(TimeProvider? clock = null)
         {
             var f = new Fixture { Root = NewRoot(), ProxyPort = FreePort(), WebPort = FreePort() };
             f.Repository = new(f.Root);
@@ -260,7 +296,7 @@ public class WebControlTests
             var store = new WebControlStore(f.Root);
             store.Save(store.Prepare(new() { Enabled = true, Password = Password, Port = f.WebPort }, f.ProxyPort));
             f.Server = new(f.Root, (request, actor, ct) => (Task<IpcResponse>)typeof(ProxyWorker).GetMethod("Handle", Flags)!.Invoke(f.Worker, [request, true, actor, ct])!,
-                (operation, actor, detail) => f.Logs.Add(new(DateTimeOffset.UtcNow, "監査", "", "", 0, true, operation + ": " + detail, Actor: actor)));
+                (operation, actor, detail) => f.Logs.Add(new(DateTimeOffset.UtcNow, "監査", "", "", 0, true, operation + ": " + detail, Actor: actor)), clock);
             await f.Server.InitializeAsync(default);
             typeof(ProxyWorker).GetField("webControl", Flags)!.SetValue(f.Worker, f.Server);
             Assert.True(f.Server.Status().Running, f.Server.Status().Error);
@@ -298,5 +334,11 @@ public class WebControlTests
             (typeof(ProxyWorker).GetField("engine", Flags)!.GetValue(Worker) as ProxyEngine)?.Dispose(); Worker.Dispose();
             await Logs.DisposeAsync(); Directory.Delete(Root, true);
         }
+    }
+    private sealed class SessionClock : TimeProvider
+    {
+        private DateTimeOffset now = DateTimeOffset.UtcNow;
+        public override DateTimeOffset GetUtcNow() => now;
+        internal void Advance(TimeSpan duration) => now += duration;
     }
 }

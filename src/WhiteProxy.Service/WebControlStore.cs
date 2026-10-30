@@ -38,10 +38,10 @@ public sealed class WebControlStore(string root)
         var options = Read();
         if (options.Revision != change.ExpectedRevision) throw new InvalidOperationException("Web設定が別の操作で更新されています。再読込してください。");
         if (change.Port is < 1 or > 65535 || change.Port == proxyPort) throw new InvalidOperationException("Webポートは1～65535で、プロキシーポートと別にしてください。");
-        if (change.Password is null || change.Password.Length > 256) throw new InvalidOperationException("パスワードは12～256文字で指定してください。");
+        if (change.Password is null || change.Password.Length > 256) throw new InvalidOperationException("パスワードは5～256文字で指定してください。");
         if (change.Password.Length > 0)
         {
-            if (change.Password.Length < 12 || string.IsNullOrWhiteSpace(change.Password)) throw new InvalidOperationException("パスワードは空白だけを避け、12～256文字で指定してください。");
+            if (change.Password.Length < 5 || string.IsNullOrWhiteSpace(change.Password)) throw new InvalidOperationException("パスワードは空白だけを避け、5～256文字で指定してください。");
             var salt = RandomNumberGenerator.GetBytes(16);
             options.Salt = Convert.ToBase64String(salt);
             options.PasswordHash = Convert.ToBase64String(Rfc2898DeriveBytes.Pbkdf2(change.Password, salt, Iterations, HashAlgorithmName.SHA256, 32));

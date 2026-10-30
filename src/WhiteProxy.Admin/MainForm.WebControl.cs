@@ -9,7 +9,7 @@ public sealed partial class MainForm
 {
     private readonly CheckBox webEnabled = new() { Text = "Webコントロールを有効", AutoSize = true, Margin = new(3, 10, 14, 0) };
     private readonly NumericUpDown webPort = new() { Minimum = 1, Maximum = 65535, Value = 3129, Width = 85, Margin = new(3, 7, 12, 3) };
-    private readonly TextBox webPassword = new() { UseSystemPasswordChar = true, Width = 340, MaxLength = 256, PlaceholderText = "初回は12文字以上。空欄なら現在のパスワードを維持" };
+    private readonly TextBox webPassword = new() { UseSystemPasswordChar = true, Width = 340, MaxLength = 256, PlaceholderText = "初回は5文字以上。空欄なら現在のパスワードを維持" };
     private readonly TextBox webInfo = new() { ReadOnly = true, Multiline = true, Width = 900, Height = 88, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, BackColor = Color.FromArgb(246, 248, 252) };
     private WebControlStatus? webStatus;
     private bool webDirty, webLoading, webSaving;
@@ -40,12 +40,18 @@ public sealed partial class MainForm
             {
                 using var certificate = X509CertificateLoader.LoadPkcs12FromFile(path, null, X509KeyStorageFlags.EphemeralKeySet);
                 File.WriteAllBytes(file.FileName, certificate.Export(X509ContentType.Cert));
-                saveStatus.Text = "公開証明書を書き出しました。クライアントでSHA-256指紋を照合してから信頼設定してください。";
+                saveStatus.Text = "公開証明書を書き出しました。クライアントPCの「ローカルコンピューター」→「信頼されたルート証明機関」へインポートしてください。";
+                Info("公開証明書を書き出しました。\n\nブラウザーを使うクライアントPCで、次の手順でインポートしてください。\n\n" +
+                    "1. CERファイルを開き、「証明書のインストール」を選択\n" +
+                    "2. 保存場所は「ローカルコンピューター」を選択（管理者権限が必要）\n" +
+                    "3. 「証明書をすべて次のストアに配置する」を選び、\n   「信頼されたルート証明機関」を指定\n" +
+                    "4. 完了後、ブラウザーをすべて終了して起動し直す\n\n" +
+                    "インポート前に、設定画面のSHA-256指紋と照合してください。");
             }
             return Task.CompletedTask;
         });
         body.Controls.Add(row); body.Controls.Add(passwordRow);
-        body.Controls.Add(new Label { Text = "パスワードは12～256文字。変更時は全Webセッションをログアウトします。\n有効時はローカルサブネットの受信許可を自動設定（Domain/Privateのみ）。自己署名証明書を自動生成します。", AutoSize = true, MaximumSize = new(900, 0), ForeColor = Color.FromArgb(70, 82, 101), Padding = new(0, 2, 0, 8) });
+        body.Controls.Add(new Label { Text = "パスワードは5～256文字。変更時は全Webセッションをログアウトします。\n有効時はローカルサブネットの受信許可を自動設定（Domain/Privateのみ）。自己署名証明書を自動生成します。", AutoSize = true, MaximumSize = new(900, 0), ForeColor = Color.FromArgb(70, 82, 101), Padding = new(0, 2, 0, 8) });
         body.Controls.Add(webInfo); group.Controls.Add(body); parent.Controls.Add(group);
         webEnabled.CheckedChanged += (_, _) => { if (!webLoading) webDirty = true; };
         webPort.ValueChanged += (_, _) => { if (!webLoading) webDirty = true; };

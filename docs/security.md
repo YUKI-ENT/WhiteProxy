@@ -30,6 +30,6 @@ Named Pipeは `WhiteProxy.Read.v1` と `WhiteProxy.Admin.v1`。Network logon SID
 
 Windows Firewallの自動設定は、アプリ固有の `WhiteProxy-Managed-Inbound` ルールだけを対象にします。保護済み配置先のEXE・TCP待受ポート・ローカルIPv4・登録済み送信元範囲・Domain/Privateに制限し、全送信元/0を自動で許可しません。Public、Edge Traversal、Firewall無効化への変更は行いません。ルールはサービスSIDに依存しないプログラム条件を使用し、サービスの実行アカウントや権限を変更しません。既存の手動/組織ルールは別管理です。
 
-Web管理は初期無効、別のHTTPSポート3129で有効化します。`WhiteProxy-Web-Control` 規則は配置済みEXE・指定TCPポート・LocalSubnet・Domain/Privateに限定します。PBKDF2-SHA256（ランダム16バイトソルト、210,000回、32バイトハッシュ）で共通パスワードを保存し、パスワード設定はローカル管理GUIに限定します。認証後のCookieはSecure/HttpOnly/SameSite=Strict、30分で失効します。変更APIにはCSRFトークンと同一Originの確認を要求し、ログインはIPごと5回/分・全体30回/分に制限します。設定変更で全セッションを無効にします。静的ファイルは同梱し、外部CDN・解析スクリプトを使用しません。
+Web管理は初期無効、別のHTTPSポート3129で有効化します。`WhiteProxy-Web-Control` 規則は配置済みEXE・指定TCPポート・LocalSubnet・Domain/Privateに限定します。PBKDF2-SHA256（ランダム16バイトソルト、210,000回、32バイトハッシュ）で共通パスワードを保存し、パスワード設定はローカル管理GUIに限定します。認証後のCookieはSecure/HttpOnly/SameSite=Strict、ログインから24時間で失効します。変更APIにはCSRFトークンと同一Originの確認を要求し、ログインはIPごと5回/分・全体30回/分に制限します。設定変更で全セッションを無効にします。静的ファイルは同梱し、外部CDN・解析スクリプトを使用しません。
 
 Webからの端末変更時は、固定のSYSTEMタスク `WhiteProxy Firewall Sync` へ保護済み設定の再同期だけを要求します。タスクは保護済みEXEの固定引数 `--sync-firewall` を実行します。NetworkServiceにはタスクの読取り/実行のみ許可し、タスクの内容変更やEXEへの書込みを許可しません。Web管理者へWindows管理者トークンを渡さず、プロキシーの動作はNetworkServiceを維持します。証明書・公開範囲・利用手順は [Webコントロール](web-control.md) を参照してください。

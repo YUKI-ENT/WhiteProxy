@@ -186,7 +186,7 @@
   function grantEditor(k) {
     const base = clone(state.configuration), rule = rules(base).find(r => key(r) === k); if (!rule) return;
     const grants = activeGrants(base,rule), device = base.devices.find(d => d.id === rule.deviceId), service = base.services.find(s => s.id === rule.serviceId);
-    const now = new Date(), latest = grants.reduce((date,g) => Date.parse(g.expiresAtUtc) > date.valueOf() ? new Date(g.expiresAtUtc) : date,new Date(now.valueOf() + 3600000));
+    const now = new Date(), latest = grants.reduce((date,g) => Date.parse(g.expiresAtUtc) > date.valueOf() ? new Date(g.expiresAtUtc) : date,new Date(now.valueOf() + base.proxy.maximumGrantHours * 3600000));
     openEditor('一時許可・予約', `<p><strong>${esc(device?.name)}</strong> / ${esc(service?.name)}</p><p class="hint">ブラウザーの現地時刻で指定します。サーバーの一時許可上限は ${esc(base.proxy.maximumGrantHours)} 時間です。既存期限の短縮には「終了」を使用してください。</p><div class="field-grid">${field('grant-start','開始',localInput(now),{type:'datetime-local',required:true})}${field('grant-end','終了',localInput(latest),{type:'datetime-local',required:true})}</div>${grants.length ? '<h3>現在の一時許可・予約</h3><ul class="grant-list">' + grants.map(g => `<li><span>${esc(localDate(g.startsAtUtc))} ～ ${esc(localDate(g.expiresAtUtc))}</span><button type="button" class="compact delete" data-revoke="${esc(g.id)}">終了</button></li>`).join('') + '</ul>' : ''}`, async () => {
       const start = new Date(value('grant-start')), end = new Date(value('grant-end'));
       if (!Number.isFinite(start.valueOf()) || !Number.isFinite(end.valueOf()) || end <= start) throw new Error('開始・終了時刻を確認してください。');

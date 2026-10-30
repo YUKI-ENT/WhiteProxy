@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
     <!-- この値を変更してビルド・発行すると、EXEと画面のバージョンが更新されます。 -->
-    <Version>2026.10.29.5</Version>
+    <Version>2026.10.30.4</Version>
   </PropertyGroup>
 </Project>

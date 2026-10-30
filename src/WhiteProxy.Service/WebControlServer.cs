@@ -15,9 +15,11 @@ using WhiteProxy.Shared;
 namespace WhiteProxy.Service;
 
 internal sealed class WebControlServer(string root, Func<IpcRequest, string, CancellationToken, Task<IpcResponse>> command,
-    Action<string, string, string> audit) : IAsyncDisposable
+    Action<string, string, string> audit, TimeProvider? timeProvider = null) : IAsyncDisposable
 {
     private const string CookieName = "__Host-WhiteProxy";
+    private static readonly TimeSpan SessionLifetime = TimeSpan.FromHours(24);
+    private readonly TimeProvider time = timeProvider ?? TimeProvider.System;
     private readonly WebControlStore store = new(root);
     private readonly SemaphoreSlim settingsGate = new(1);
     private readonly ConcurrentDictionary<string, Session> sessions = new();
@@ -186,18 +188,18 @@ internal sealed class WebControlServer(string root, Func<IpcRequest, string, Can
         try { valid = login?.Password is not null && checkedOptions.Enabled && WebControlStore.Verify(checkedOptions, login.Password); }
         finally { loginWorkers.Release(); }
         if (!valid) { audit("Webログイン失敗", Peer(context), "パスワード不一致"); await Error(context, 401, "パスワードが違います。"); return; }
-        var now = DateTimeOffset.UtcNow;
+        var now = time.GetUtcNow();
         foreach (var entry in sessions.Where(e => e.Value.Expires <= now)) sessions.TryRemove(entry.Key, out _);
         if (sessions.Count >= 128) { await Error(context, 429, "接続数の上限です。しばらく待って再試行してください。"); return; }
         var id = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        var session = new Session(Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), now.AddMinutes(30));
+        var session = new Session(Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), now + SessionLifetime);
         lock (loginGate)
         {
             if (!ReferenceEquals(checkedOptions, options)) valid = false;
             else sessions[id] = session;
         }
         if (!valid) { await Error(context, 401, "パスワードが変更されました。ログインし直してください。"); return; }
-        context.Response.Cookies.Append(CookieName, id, new CookieOptions { Secure = true, HttpOnly = true, SameSite = SameSiteMode.Strict, Path = "/", MaxAge = TimeSpan.FromMinutes(30) });
+        context.Response.Cookies.Append(CookieName, id, new CookieOptions { Secure = true, HttpOnly = true, SameSite = SameSiteMode.Strict, Path = "/", MaxAge = SessionLifetime });
         audit("Webログイン", Peer(context), "");
         await context.Response.WriteAsJsonAsync(new { success = true, csrfToken = session.Csrf });
     }
@@ -205,7 +207,7 @@ internal sealed class WebControlServer(string root, Func<IpcRequest, string, Can
     {
         lock (loginGate)
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = time.GetUtcNow();
             foreach (var key in loginAttempts.Where(p => now - p.Value.Start >= TimeSpan.FromMinutes(1)).Select(p => p.Key).ToList()) loginAttempts.Remove(key);
             if (loginAttempts.Values.Sum(v => v.Count) >= 30) return false;
             var window = loginAttempts.GetValueOrDefault(ip, (Start: now, Count: 0));
@@ -217,7 +219,7 @@ internal sealed class WebControlServer(string root, Func<IpcRequest, string, Can
     {
         var id = context.Request.Cookies[CookieName];
         if (id is null || !sessions.TryGetValue(id, out var session)) return null;
-        if (session.Expires <= DateTimeOffset.UtcNow) { sessions.TryRemove(id, out _); return null; }
+        if (session.Expires <= time.GetUtcNow()) { sessions.TryRemove(id, out _); return null; }
         return session;
     }
     private async Task<bool> AuthorizeMutation(HttpContext context)
