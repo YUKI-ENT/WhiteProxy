@@ -98,6 +98,11 @@ WAN接続・NAT・VLAN自体の作成は既存構成に合わせます。タグV
 
     初期待受は `127.0.0.1` で、そのPC自身からしか接続できません。変更することにより、選択したNIC、あるいは全NICで待ち受けるようになります。
 
+5. 一旦起動したらWindowsのサービスとして実行されるので、PCを再起動しても自動でスタートします。管理画面の起動は、タスクトレイのアイコンをダブルクリックか右クリックで起動メニューが開きます。
+
+   <img width="149" height="73" alt="image" src="https://github.com/user-attachments/assets/8db5e8d2-d4e8-4be8-94ad-96b89016df03" />
+
+
 
 ## 4. サービス・Firewallの登録と確認 （インターネットゾーンPC）
 
@@ -121,7 +126,9 @@ WAN接続・NAT・VLAN自体の作成は既存構成に合わせます。タグV
 
    サービスはWindows起動時に自動開始します。画面を閉じてもプロキシーは動きます。トレイアイコンは登録を行ったユーザーのログオン後に表示されます。
 
-### 接続確認と端末側の設定
+    <img width="149" height="73" alt="image" src="https://github.com/user-attachments/assets/8db5e8d2-d4e8-4be8-94ad-96b89016df03" />
+
+### 接続確認と端末側（閉鎖電子カルテゾーンPC）の設定
 
 手順6で端末を登録した後、利用端末でPowerShellを開き、次を実行します。
 
@@ -132,6 +139,9 @@ Test-NetConnection 192.168.10.10 -Port 3128
 `TcpTestSucceeded : True` が目安です。これはポートへの到達確認なので、Webサイトの許可は別途ルールで確認します。
 
 利用端末のWindows「設定」→「ネットワークとインターネット」→「プロキシ」で、手動プロキシを `192.168.10.10`、ポート `3128` に設定します。院内の電子カルテなど、直接接続する宛先は組織の既存の除外設定を維持してください。
+
+<img width="790" height="628" alt="image" src="https://github.com/user-attachments/assets/5c158ff2-f48b-482b-81a9-fec124a864b2" />
+
 
 Windows Updateにはブラウザー用とは別のプロキシー設定が必要な場合があります。[端末・Windows Updateの設定](client-setup.md) を確認してください。
 
