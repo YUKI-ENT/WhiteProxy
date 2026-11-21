@@ -212,6 +212,16 @@ public sealed class ProxyWorker(ConfigurationRepository repository) : Background
             catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or JsonException or FormatException or System.Security.Cryptography.CryptographicException)
             { return Fail("Web設定を適用できませんでした。" + (ex is InvalidOperationException ? ex.Message : " ポート・証明書・保存先を確認してください。")); }
         }
+        if (request.Operation == "log-search-support")
+            return new() { Success = true, Message = Protocol.LogSearchCapability };
+        if (request.Operation == "logs" && request.LogQuery is { } query)
+        {
+            if (query.Search is null || query.Search.Length > 1000 || query.Kind is < 0 or > 3)
+                return Fail("ログ検索条件が不正です。");
+            try { return new() { Success = true, Logs = await logs!.SearchAsync(query, ct), Message = "保存ログ検索" }; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { return Fail("保存ログを読み取れませんでした。保存先を確認してください。"); }
+        }
         await mutation.WaitAsync(ct);
         try
         {

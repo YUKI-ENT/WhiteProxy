@@ -69,6 +69,21 @@ public sealed partial class MainForm
         Close();
     }
 
+    protected override void WndProc(ref Message message)
+    {
+        if (GuiInstance.ExitForUpgradeMessage != 0 && message.Msg == GuiInstance.ExitForUpgradeMessage)
+        {
+            // 編集画面やサービス操作中は自動終了せず、更新側へ手動終了を案内する。
+            if (!serviceBusy && OwnedForms.Length == 0)
+            {
+                timer.Stop();
+                ExitGui();
+            }
+            return;
+        }
+        base.WndProc(ref message);
+    }
+
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);

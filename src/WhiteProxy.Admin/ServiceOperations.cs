@@ -9,6 +9,29 @@ namespace WhiteProxy.Admin;
 
 internal static class ServiceOperations
 {
+    internal static string InstalledExecutablePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WhiteProxy", "WhiteProxy.exe");
+    internal static async Task UpdateAutomaticallyAsync(bool restart)
+    {
+        if (!Program.IsAdmin()) throw new InvalidOperationException("Windows管理者権限が必要です。");
+        // 設定の読込に失敗する場合は、稼働中の旧サービスを停止しない。
+        var repository = new ConfigurationRepository(ServiceHost.DataDirectory);
+        if (File.Exists(repository.FilePath) || File.Exists(repository.FilePath + ".bak"))
+            await repository.LoadAsync(default);
+        using var service = new System.ServiceProcess.ServiceController("WhiteProxy");
+        if (service.Status != System.ServiceProcess.ServiceControllerStatus.Stopped)
+        {
+            service.Stop();
+            await Task.Run(() => service.WaitForStatus(System.ServiceProcess.ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30)));
+        }
+        // 登録先・実行アカウント・起動方法は変更せず、EXEだけ入れ替える。
+        DeploySingleFile();
+        if (restart)
+        {
+            await SyncSavedFirewallAsync();
+            await Sc("start", "WhiteProxy");
+            await WaitForConnectionAsync();
+        }
+    }
     public static async Task<string> ExecuteAsync(string operation)
     {
         if (!Program.IsAdmin()) throw new InvalidOperationException("Windows管理者権限が必要です。");
@@ -137,7 +160,7 @@ internal static class ServiceOperations
         var source = Environment.ProcessPath!;
         if (File.Exists(Path.ChangeExtension(source, ".runtimeconfig.json")))
             throw new InvalidOperationException("サービス登録には単一ファイル発行したWhiteProxy.exeを使用してください。開発時は管理者権限で --console を実行できます。");
-        var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WhiteProxy");
+        var directory = Path.GetDirectoryName(InstalledExecutablePath)!;
         Directory.CreateDirectory(directory);
         if (new DirectoryInfo(directory).Attributes.HasFlag(FileAttributes.ReparsePoint))
             throw new InvalidOperationException("配置先にリンクは使用できません。");
@@ -154,7 +177,8 @@ internal static class ServiceOperations
                 throw new InvalidOperationException("配置先EXEにリンクは使用できません。");
             var temporary = Path.Combine(directory, "WhiteProxy.new.exe");
             if (File.Exists(temporary)) File.Delete(temporary);
-            File.Copy(source, temporary); File.Move(temporary, destination, true);
+            File.Copy(source, temporary);
+            ReplaceExecutable(temporary, destination);
         }
         var fileAcl = new FileSecurity(); fileAcl.SetAccessRuleProtection(true, false);
         foreach (var sid in new[] { WellKnownSidType.BuiltinAdministratorsSid, WellKnownSidType.LocalSystemSid })
@@ -163,6 +187,14 @@ internal static class ServiceOperations
             fileAcl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(sid, null), FileSystemRights.ReadAndExecute, AccessControlType.Allow));
         new FileInfo(destination).SetAccessControl(fileAcl);
         return destination;
+    }
+    internal static void ReplaceExecutable(string temporary, string destination)
+    {
+        if (!File.Exists(destination)) { File.Move(temporary, destination); return; }
+        var backup = Path.ChangeExtension(destination, ".previous.exe");
+        if (File.Exists(backup) && File.GetAttributes(backup).HasFlag(FileAttributes.ReparsePoint))
+            throw new InvalidOperationException("更新前EXEの退避先にリンクは使用できません。");
+        File.Replace(temporary, destination, backup, true);
     }
     private static async Task Sc(params string[] args)
     {

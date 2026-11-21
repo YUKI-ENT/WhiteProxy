@@ -12,7 +12,16 @@ internal static class Program
     private static void Main(string[] args)
     {
         var mode = StartupPolicy.Mode(args);
-        if (mode == ApplicationMode.Gui && !args.Contains("--tray") && GuiInstance.ActivateExisting()) return;
+        var openSettings = args.Contains("--settings");
+        ServiceUpdatePlan? update = null;
+        string? startupNotice = null;
+        if (mode == ApplicationMode.Gui)
+        {
+            try { update = ServiceAutoUpdate.Inspect(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+            { startupNotice = "サービスの自動更新を確認できませんでした。「設定・サービス」で確認してください。"; }
+        }
+        if (mode == ApplicationMode.Gui && update is null && !args.Contains("--tray") && GuiInstance.ActivateExisting()) return;
         if (StartupPolicy.NeedsElevation(mode, IsAdmin()))
         {
             if (Debugger.IsAttached && mode is ApplicationMode.Gui or ApplicationMode.Console)
@@ -62,14 +71,52 @@ internal static class Program
             }
             return;
         }
-        using var instance = new GuiInstance();
+        if (update is not null)
+        {
+            try
+            {
+                using var updateLock = new Mutex(false, @"Global\WhiteProxy.Admin.ServiceUpdate");
+                bool acquired;
+                try { acquired = updateLock.WaitOne(0); }
+                catch (AbandonedMutexException) { acquired = true; }
+                if (!acquired)
+                {
+                    MessageBox.Show("別のWhiteProxyがサービスを更新中です。更新が終わってから起動してください。", "WhiteProxy", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                try
+                {
+                    using var progress = new ServiceUpdateDialog(update, () => Task.Run(async () =>
+                    {
+                        var latest = ServiceAutoUpdate.Inspect();
+                        if (latest is null) return "サービスは更新済みです。";
+                        return await ServiceAutoUpdate.ApplyAsync(latest, GuiInstance.CloseForUpgradeAsync,
+                            ServiceOperations.UpdateAutomaticallyAsync);
+                    }));
+                    progress.ShowDialog();
+                    if (progress.Failure is { } failure) throw failure;
+                    startupNotice = progress.Notice;
+                }
+                finally { updateLock.ReleaseMutex(); }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("サービスの自動更新を完了できませんでした。\n\n" + ex.Message,
+                    "WhiteProxy — 自動更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                startupNotice = "サービスの自動更新に失敗しました。「設定・サービス」で状態を確認してください。";
+                openSettings = true;
+            }
+        }
+        using var instance = new GuiInstance(waitMilliseconds: update is not null ? 3000 : 0);
         if (!instance.Acquired)
         {
             if (args.Contains("--tray")) return;
             if (!GuiInstance.ActivateExisting()) MessageBox.Show("管理GUIは既に起動中です。画面が開くまでお待ちください。", "WhiteProxy", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        Application.Run(new MainForm(openSettings: args.Contains("--settings"), startInTray: args.Contains("--tray")));
+        using var form = new MainForm(openSettings: openSettings, startInTray: args.Contains("--tray") && !openSettings);
+        if (startupNotice is not null) form.ShowStartupNotice(startupNotice);
+        Application.Run(form);
     }
     internal static bool IsAdmin()
     {

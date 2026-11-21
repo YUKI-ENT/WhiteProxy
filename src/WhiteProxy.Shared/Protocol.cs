@@ -8,6 +8,7 @@ namespace WhiteProxy.Shared;
 public static class Protocol
 {
     public const string OrderedRulesCapability = "active-ordered-rules-v3";
+    public const string LogSearchCapability = "saved-log-search-v1";
     public const string ReadPipe = "WhiteProxy.Read.v1";
     public const string AdminPipe = "WhiteProxy.Admin.v1";
     public const string ServiceName = "WhiteProxy";
@@ -51,6 +52,21 @@ public sealed class IpcRequest
     public string Reason { get; set; } = "";
     public string GrantId { get; set; } = "";
     public WebControlChange? WebControl { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public LogQuery? LogQuery { get; set; }
+}
+
+public sealed class LogQuery
+{
+    public string Search { get; set; } = "";
+    public int Kind { get; set; }
+    public DateTimeOffset? FromUtc { get; set; }
+    public DateTimeOffset? UntilUtc { get; set; }
+
+    public bool Matches(LogEntry e) =>
+        (string.IsNullOrWhiteSpace(Search) || $"{e.Peer} {e.Host} {e.RequestPath} {e.Reason} {e.ServiceId} {e.Actor}".Contains(Search, StringComparison.OrdinalIgnoreCase)) &&
+        (Kind == 0 || Kind == 1 && e.Kind == "通信" && e.Allowed || Kind == 2 && e.Kind == "通信" && !e.Allowed || Kind == 3 && e.Kind == "監査") &&
+        (FromUtc is null || e.TimeUtc >= FromUtc) && (UntilUtc is null || e.TimeUtc < UntilUtc);
 }
 
 public sealed class IpcResponse

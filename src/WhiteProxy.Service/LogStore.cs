@@ -35,6 +35,50 @@ public sealed class LogStore : IAsyncDisposable
         writer = WriteLoop();
     }
     public List<LogEntry> Snapshot() => recent.Reverse().Take(1000).ToList();
+    public async Task<List<LogEntry>> SearchAsync(LogQuery query, CancellationToken ct)
+    {
+        // 未保存の直近ログも含める。同一内容のログが複数ある場合も件数を保つ。
+        var pending = recent.ToArray().GroupBy(e => e).ToDictionary(g => g.Key, g => g.Count());
+        var matches = new PriorityQueue<LogEntry, DateTimeOffset>();
+        void Include(LogEntry entry)
+        {
+            if (!query.Matches(entry)) return;
+            matches.Enqueue(entry, entry.TimeUtc);
+            if (matches.Count > 1000) matches.Dequeue();
+        }
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-RetentionDays);
+        foreach (var path in Directory.GetFiles(directory, "*.jsonl").OrderDescending())
+        {
+            ct.ThrowIfCancellationRequested();
+            if (File.GetLastWriteTimeUtc(path) < cutoff.UtcDateTime) continue;
+            if (DateOnly.TryParseExact(Path.GetFileName(path).AsSpan(0, Math.Min(8, Path.GetFileName(path).Length)),
+                "yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date))
+            {
+                if (query.FromUtc is { } from && date < DateOnly.FromDateTime(from.UtcDateTime) ||
+                    query.UntilUtc is { } until && date > DateOnly.FromDateTime(until.UtcDateTime)) continue;
+                if (matches.Count == 1000 && matches.TryPeek(out _, out var oldest) && date < DateOnly.FromDateTime(oldest.UtcDateTime)) continue;
+            }
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+                8192, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            using var reader = new StreamReader(stream);
+            while (await reader.ReadLineAsync(ct) is { } line)
+            {
+                ct.ThrowIfCancellationRequested();
+                LogEntry? entry;
+                try { entry = JsonSerializer.Deserialize<LogEntry>(line); }
+                catch (JsonException) { continue; }
+                if (entry is null) continue;
+                if (pending.TryGetValue(entry, out var count))
+                {
+                    if (count == 1) pending.Remove(entry); else pending[entry] = count - 1;
+                }
+                Include(entry);
+            }
+        }
+        foreach (var (entry, count) in pending)
+            for (var i = 0; i < count; i++) Include(entry);
+        return matches.UnorderedItems.Select(item => item.Element).OrderByDescending(e => e.TimeUtc).ToList();
+    }
     public bool Add(LogEntry entry)
     {
         recent.Enqueue(entry); while (recent.Count > 1000) recent.TryDequeue(out _);

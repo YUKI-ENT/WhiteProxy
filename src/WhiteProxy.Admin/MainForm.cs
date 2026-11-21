@@ -34,12 +34,21 @@ public sealed partial class MainForm : Form
     private readonly DateTimePicker logFrom = new() { Width = 140, Format = DateTimePickerFormat.Short, ShowCheckBox = true, Checked = false };
     private readonly DateTimePicker logTo = new() { Width = 140, Format = DateTimePickerFormat.Short, ShowCheckBox = true, Checked = false };
     private List<LogEntry> logEntries = [];
+    private bool logsLoaded;
+    private CancellationTokenSource? logSearchCancellation;
+    private readonly Label logResultInfo = new() { AutoSize = true };
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 2000 };
     private Configuration current = Templates.CreateDefault();
     private ServiceStatus? status;
     private bool refreshing, connected;
 
     public MainForm() : this(false) { }
+
+    internal void ShowStartupNotice(string text)
+    {
+        saveStatus.Text = text;
+        toolTips.SetToolTip(saveStatus, text);
+    }
 
     public MainForm(bool openSettings, bool startInTray = false)
     {
@@ -272,14 +281,102 @@ public sealed partial class MainForm : Form
     {
         LogTableTheme.Configure(logGrid);
         var page = Page("通信・監査ログ"); var bar = Toolbar(98);
-        AddButton(bar, "ログを取得", async () => { var r = await client.SendAsync(new() { Operation = "logs" }); logEntries = r.Logs; FilterLogs(); });
+        AddButton(bar, "ログを取得", () => LoadLogsAsync());
         AddButton(bar, "表示結果をCSV出力", ExportLogs);
         AddButton(bar, "拒否ホストをサービスへ追加", AddDeniedHost);
         logKind.Items.AddRange(["すべて", "許可", "拒否", "監査"]); logKind.SelectedIndex = 0;
         bar.Controls.AddRange([logSearch, logKind, new Label { Text = "開始", AutoSize = true }, logFrom, new Label { Text = "終了", AutoSize = true }, logTo]);
-        logSearch.TextChanged += (_, _) => FilterLogs(); logKind.SelectedIndexChanged += (_, _) => FilterLogs();
-        logFrom.ValueChanged += (_, _) => FilterLogs(); logTo.ValueChanged += (_, _) => FilterLogs();
-        page.Controls.Add(logGrid); page.Controls.Add(Note("直近1,000件。HTTPはパスを表示。HTTPS等のCONNECTはTLS非復号のためパス取得不可です。\nクエリ・本文・Cookie・認証ヘッダーは記録しません。JSONLはlogs/に保存。CSVは現在のフィルタ結果を出力します。")); page.Controls.Add(bar);
+        logSearch.TextChanged += async (_, _) => { if (logsLoaded) await LoadLogsAsync(true); };
+        logKind.SelectedIndexChanged += async (_, _) => { if (logsLoaded) await LoadLogsAsync(true); };
+        logFrom.ValueChanged += async (_, _) => { if (logsLoaded) await LoadLogsAsync(true); };
+        logTo.ValueChanged += async (_, _) => { if (logsLoaded) await LoadLogsAsync(true); };
+        bar.Controls.Add(logResultInfo);
+        ConfigureLogMenu();
+        Disposed += (_, _) => { logSearchCancellation?.Cancel(); logSearchCancellation?.Dispose(); };
+        page.Controls.Add(logGrid); page.Controls.Add(Note("保持期間内の保存ログ全体を検索し、条件に一致した最新1,000件を表示します。HTTPはパスを表示。HTTPS等のCONNECTはパス取得不可です。\nクエリ・本文・Cookie・認証ヘッダーは記録しません。JSONLはlogs/に保存。CSVは表示結果を出力します。")); page.Controls.Add(bar);
+    }
+    private void ConfigureLogMenu()
+    {
+        var menu = new ContextMenuStrip();
+        var copy = menu.Items.Add("宛先アドレスをコピー");
+        var add = menu.Items.Add("サービスに追加");
+        string Host() => Convert.ToString(logGrid.CurrentRow?.Cells["宛先ホスト"].Value) ?? "";
+        menu.Opening += (_, e) =>
+        {
+            copy.Enabled = !string.IsNullOrWhiteSpace(Host());
+            add.Enabled = copy.Enabled && Convert.ToString(logGrid.CurrentRow?.Cells["種別"].Value) == "通信" &&
+                connected && orderedRules && current.Services.Count > 0;
+            e.Cancel = logGrid.CurrentRow is null;
+        };
+        add.Click += async (_, _) =>
+        {
+            try { await AddLogHost(); }
+            catch (Exception ex) when (ex is IOException or OperationCanceledException or UnauthorizedAccessException or InvalidOperationException)
+            { Info("サービスに追加できませんでした。\n" + ex.Message); }
+        };
+        copy.Click += (_, _) =>
+        {
+            var host = Host();
+            if (string.IsNullOrWhiteSpace(host)) return;
+            try { Clipboard.SetText(host); }
+            catch (System.Runtime.InteropServices.ExternalException) { Info("クリップボードにコピーできませんでした。もう一度お試しください。"); }
+        };
+        logGrid.CellMouseDown += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Right) return;
+            if (e.RowIndex < 0) { logGrid.ClearSelection(); logGrid.CurrentCell = null; return; }
+            logGrid.ClearSelection();
+            logGrid.CurrentCell = logGrid.Rows[e.RowIndex].Cells[Math.Max(0, e.ColumnIndex)];
+            logGrid.Rows[e.RowIndex].Selected = true;
+        };
+        logGrid.MouseDown += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Right && logGrid.HitTest(e.X, e.Y).RowIndex < 0)
+            { logGrid.ClearSelection(); logGrid.CurrentCell = null; }
+        };
+        logGrid.ContextMenuStrip = menu;
+        logGrid.Disposed += (_, _) => menu.Dispose();
+    }
+
+    private LogQuery CurrentLogQuery() => new()
+    {
+        Search = logSearch.Text, Kind = Math.Max(0, logKind.SelectedIndex),
+        FromUtc = logFrom.Checked ? LogDateUtc(logFrom.Value.Date) : null,
+        UntilUtc = logTo.Checked ? LogDateUtc(logTo.Value.Date.AddDays(1)) : null
+    };
+    private DateTimeOffset LogDateUtc(DateTime date) => TimeZoneInfo.ConvertTimeToUtc(
+        DateTime.SpecifyKind(date, DateTimeKind.Unspecified), TimeZoneInfo.FindSystemTimeZoneById(current.Proxy.TimeZoneId));
+
+    private async Task LoadLogsAsync(bool debounce = false)
+    {
+        logsLoaded = true;
+        logSearchCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        logSearchCancellation = cancellation;
+        logEntries = []; FilterLogs();
+        logResultInfo.Text = "保存ログを検索中…";
+        try
+        {
+            if (debounce) await Task.Delay(350, cancellation.Token);
+            var result = await LogRetrieval.ReadAsync((request, ct) => client.SendAsync(request, ct: ct), CurrentLogQuery(), cancellation.Token);
+            var response = result.Response;
+            if (cancellation.IsCancellationRequested || IsDisposed) return;
+            if (!response.Success) { logResultInfo.Text = response.Message; return; }
+            if (result.SavedHistory && response.Message != "保存ログ検索")
+            { logResultInfo.Text = "保存ログ検索にはサービスのプログラム更新が必要です。"; return; }
+            logEntries = response.Logs; FilterLogs();
+            logResultInfo.Text = result.SavedHistory
+                ? $"{logEntries.Count:N0} 件表示（条件一致の最新1,000件まで）"
+                : $"{FilteredLogs().Count():N0} 件表示（旧サービスの直近1,000件から抽出）。保存ログ全体の検索には「設定・サービス」で停止→「サービスのプログラムを更新」が必要です。";
+        }
+        catch (OperationCanceledException) { if (!cancellation.IsCancellationRequested && !IsDisposed) logResultInfo.Text = "検索がタイムアウトしました。期間を絞って再取得してください。"; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { if (!cancellation.IsCancellationRequested && !IsDisposed) logResultInfo.Text = "ログを取得できませんでした。サービスの接続を確認してください。"; }
+        finally
+        {
+            if (ReferenceEquals(logSearchCancellation, cancellation)) logSearchCancellation = null;
+            cancellation.Dispose();
+        }
     }
     private void BuildSettings()
     {
@@ -398,6 +495,20 @@ public sealed partial class MainForm : Form
                 connectionHelp += "\n直近の起動情報: " + report.Stage + " / " + report.Message;
             state.Text = "■ " + installation.Description;
             summary.Text = connectionHelp;
+            if (installation.State == "Stopped")
+            {
+                try
+                {
+                    if (await LoadSavedConfigurationAsync(ServiceHost.DataDirectory))
+                        summary.Text += "\n保存済み設定を表示しています。サービスを開始すると通信制御が再開します。";
+                    else
+                        summary.Text += "\n保存設定の現行ファイルが見つかりません。保存先とバックアップを確認してください。";
+                }
+                catch (Exception loadError) when (loadError is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+                {
+                    summary.Text += "\n保存設定を読み取れません。一覧の表示だけでは設定の消失は判断できません。保存先とバックアップを確認してください。";
+                }
+            }
         }
         finally
         {
@@ -412,6 +523,19 @@ public sealed partial class MainForm : Form
                 RefreshTables(); UpdateServiceControls(installation);
             }
         }
+    }
+
+    internal async Task<bool> LoadSavedConfigurationAsync(string directory)
+    {
+        try
+        {
+            var saved = await new ConfigurationRepository(directory).LoadAsync(default);
+            if (IsDisposed || Disposing) return false;
+            current = saved;
+            return true;
+        }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
     }
 
     private void RefreshTables()
@@ -613,10 +737,7 @@ public sealed partial class MainForm : Form
     }
     private static NumericUpDown Number(int value, int min, int max) => new() { Minimum = min, Maximum = max, Value = Math.Clamp(value, min, max) };
 
-    private IEnumerable<LogEntry> FilteredLogs() => logEntries.Where(e =>
-        (string.IsNullOrWhiteSpace(logSearch.Text) || $"{e.Peer} {e.Host} {e.RequestPath} {e.Reason} {e.ServiceId} {e.Actor}".Contains(logSearch.Text, StringComparison.OrdinalIgnoreCase)) &&
-        (logKind.SelectedIndex == 0 || logKind.SelectedIndex == 1 && e.Allowed && e.Kind == "通信" || logKind.SelectedIndex == 2 && !e.Allowed || logKind.SelectedIndex == 3 && e.Kind == "監査") &&
-        (!logFrom.Checked || ToLocalValue(e.TimeUtc).Date >= logFrom.Value.Date) && (!logTo.Checked || ToLocalValue(e.TimeUtc).Date <= logTo.Value.Date));
+    private IEnumerable<LogEntry> FilteredLogs() => logEntries.Where(CurrentLogQuery().Matches);
     private void FilterLogs()
     {
         Fill(logGrid, ["時刻", "種別", "端末IP", "宛先ホスト", "パス", "ポート", "結果", "理由", "サービス", "バイト", "秒", "操作者SID"],
@@ -642,13 +763,15 @@ public sealed partial class MainForm : Form
         lines.AddRange(FilteredLogs().Select(e => string.Join(',', new object?[] { e.TimeUtc.ToString("O"), e.Kind, e.Peer, e.Host, LogPath(e), e.Port, e.Allowed, e.Reason, e.ServiceId, e.Bytes, e.Seconds, e.Actor }.Select(Csv))));
         File.WriteAllLines(dialog.FileName, lines, new UTF8Encoding(true)); return Task.CompletedTask;
     }
-    private Task AddDeniedHost()
+    private Task AddDeniedHost() => AddLogHost(deniedOnly: true);
+    private Task AddLogHost(bool deniedOnly = false)
     {
         if (!CanEdit() || logGrid.CurrentRow is null) return Task.CompletedTask;
         var host = Convert.ToString(logGrid.CurrentRow.Cells["宛先ホスト"].Value);
         var result = Convert.ToString(logGrid.CurrentRow.Cells["結果"].Value);
-        if (result != "拒否" || string.IsNullOrWhiteSpace(host)) { Info("宛先ホストがある拒否行を選択してください。"); return Task.CompletedTask; }
-        using var form = new EditorDialog("拒否ログのホストを追加", 380);
+        if (string.IsNullOrWhiteSpace(host) || Convert.ToString(logGrid.CurrentRow.Cells["種別"].Value) != "通信" || deniedOnly && result != "拒否")
+        { Info(deniedOnly ? "宛先ホストがある拒否行を選択してください。" : "宛先ホストがある通信行を選択してください。"); return Task.CompletedTask; }
+        using var form = new EditorDialog("ログのホストをサービスに追加", 380);
         var c = JsonDefaults.Clone(current);
         var choice = form.Add("追加するサービス", Editors.Choices(c.Services.Select(s => new Choice(s.Id, s.Name))));
         form.Add("ホスト", new Label { Text = host, AutoSize = true });
